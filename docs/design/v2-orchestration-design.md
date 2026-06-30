@@ -365,6 +365,70 @@ gates:
 
 ---
 
+## 6. Composer 动态合成机制 [LOCKED]
+
+最核心也最难的一层。把澄清后的目标编译成一套可交付的执行资源。
+
+### 输入 / 输出
+
+输入:澄清后的目标(goal.clarified + clarifications + deliverable_type)、
+shared/ 已有 agents/skills/scripts、能力矩阵(可用 executors)。
+
+输出:workflow.yaml、agents/*.yaml、skills/*、scripts/*、selected_executor。
+
+### 合成驱动 = 选项 3(LLM + 代码分工)
+
+- **LLM 负责创造性**:任务分解、角色推导、生成 skill 内容
+- **代码负责确定性**:DAG 校验、资源查找、能力匹配
+
+内部步骤:
+1. 任务分解:目标 → 任务 DAG(desc/inputs/outputs/checks)
+2. 角色推导:每个 task 需要什么角色 → agent roster
+3. 能力推导:workflow 需要哪些 capabilities → 选 executor
+4. 资源匹配:每个 agent/skill/script,**先查项目私有,再查 shared,没有才临时生成**
+5. 自检(见下)
+
+### 三层自检(自检不轻,需自动化评测)
+
+**第一层:确定性硬校验(代码,必过项;不过直接打回 Composer,不浪费人/LLM)**
+- DAG 无环
+- 每个 task.inputs 引用的 path 都有上游 outputs 产出(或来自 goal/已有文件)—— 数据流闭合
+- 每个 task 有 checks(无验收不执行,铁律)
+- 引用的 agent/skill/script 真实存在(项目私有/shared/已生成)
+- selected_executor 能力覆盖 required_capabilities
+- 每个 gate 的 bounce_to 指向真实 task
+
+**第二层:质量评测(独立评测模型,产出评分+理由)**
+- **必须用独立模型,不能既当裁判又当运动员**(评测模型 ≠ 生成模型,最好不同源)
+- 评分维度(先暂定,后续迭代):
+  - 任务分解合理性(粒度、是否覆盖 goal.acceptance 每条)
+  - 验收充分性(checks 是否真能验证 deliverable,而非空泛)
+  - 角色匹配度(agent prompt/权限/skill 是否匹配其 task)
+  - 覆盖度(goal.acceptance 每条是否有 task 支撑)
+  - skill 质量(临时生成的 SKILL.md 是否有实质内容)
+- 每项给分+理由,低于阈值的项打回重生成或标记给人审重点看
+
+**第三层:人审(plan_review 门,必过)**
+- 人看到 workflow + 自检评分报告(哪些高分/被标记/临时生成需重点看)
+- 让人审有的放矢,而非从零读
+- **Composer 产出必须经人审,不直接执行**
+
+### 重生成上限
+
+自检打回重生成**上限 3 次**;超限带低分报告强制交人审(人决定手动改或放弃),
+避免 LLM 反复刷不过卡死。
+
+### 模型角色(脚手架的"大脑")
+
+系统配置区分三类模型角色:
+- **composer model** — 生成(分解、角色、写 skill)
+- **evaluator model** — 评分(独立,最好不同厂商/模型,避免同源偏见)
+- executor — Hermes/Claude Code 等,由能力矩阵选,是"手"不是"脑"
+
+第一版默认配两个不同模型(composer / evaluator),允许用户覆盖。
+
+---
+
 ## 待讨论清单(按依赖顺序)
 
 核心设计:
@@ -376,8 +440,8 @@ gates:
 
 执行机制:
 - [x] 5. Clarifier 澄清对话机制
-- [ ] 6. Composer 动态合成机制(下一项)
-- [ ] 7. Verifier / 方案闭环判定
+- [x] 6. Composer 动态合成机制
+- [ ] 7. Verifier / 方案闭环判定(下一项)
 - [ ] 8. Executor 适配层(核心已在第 2 项锁定,接口细节待补)
 
 支撑能力:
