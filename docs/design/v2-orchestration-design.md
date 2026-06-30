@@ -575,6 +575,24 @@ status_changed / task_updated / approval_required / verdict / log 等)。
 
 ---
 
+## 13. 权限与安全边界 [DEFERRED — 推迟到闭环跑通后]
+
+**推迟理由**:权限是"加固"环节,不是闭环本身。第一版要先证明
+"目标 → 方案 → 验证"这条链能跑通。过早设计权限会拖慢核心验证,
+且现在定的边界等真跑起来很可能推翻重来。
+
+**第一版最低安全底线(现有设计已自带,无需额外工作):**
+- workdir 隔离:agent 只在 `projects/<id>/` 里跑(第 8 项已定)
+- secrets 不进 git:`.env` 已在 `.gitignore` 排除
+
+**推迟的细节(闭环跑通后再设计):**
+- 工具权限白名单(per-task allowedTools,最小权限、按需提权)
+- 文件系统边界强约束
+- secrets 注入机制(.env → 环境变量,或 keychain/外部 secrets manager)
+- 危险操作拦截(命令黑白名单,长任务无人值守时尤其重要)
+
+---
+
 ## 待讨论清单(按依赖顺序)
 
 核心设计:
@@ -592,8 +610,8 @@ status_changed / task_updated / approval_required / verdict / log 等)。
 
 支撑能力:
 - [x] 12. 控制面 / 交互入口
-- [ ] 13. 权限与安全边界(下一项)
-- [ ] 9. 长任务运行与恢复
+- [~] 13. 权限与安全边界(推迟)
+- [ ] 9. 长任务运行与恢复(下一项)
 - [ ] 14. 跨项目知识沉淀
 
 落地:
