@@ -265,6 +265,56 @@ created
 
 ---
 
+## 11. 审批门 Gates [LOCKED]
+
+Gate 的本质:执行流在某点暂停,等一个判定(人或机器),判定结果决定往哪走。
+通用机制,方案阶段和实现阶段共用。
+
+### 两种门类型
+
+- **human_approval** — 暂停等人(方案确认、进入实现、危险操作);
+  timeout 默认 hold + 主动提醒,**不自动拒绝**(避免丢失长任务成果)
+- **auto_check** — 机器判定,check 条件满足(如 verifier 结果)自动放行,不烦人。
+  **自动放行也必须留痕**:记日志(谁/何时/基于什么 check/放行了哪个门),
+  和人工审批一样可追溯 —— 自动决策也不是黑盒
+
+### 打回机制 (reject → bounce)
+
+- `bounce_to` 指定打回的 task
+- `cascade: downstream` 自动重跑该 task **及其所有下游依赖**(顺 DAG 往下,保证数据一致)
+- reject 反馈写进重跑 task 的上下文,让 agent 知道为什么被打回、要改什么
+- 每次重跑 = 一个新 run,记录到 runs/(agent 持久,执行多次=多个 run)
+
+### Gate 模型
+
+```yaml
+gates:
+  - id: g1
+    after: t3                    # 触发点:某 task 后(或某状态进入时)
+    type: human_approval         # human_approval | auto_check
+    title: "方案审查确认"
+    presents:                    # 决策依据(给审批人/自动判定看什么)
+      - solution/solution.md
+      - solution/review.md
+    check:                       # 仅 type=auto_check:放行条件
+      all_tasks_passed: true
+    options: [approve, reject]
+    on_approve:
+      writes: decisions.md
+      next: approved
+    on_reject:
+      bounce_to: t2              # 打回到哪个 task
+      cascade: downstream        # 重跑它 + 所有下游依赖
+      feedback_to_context: true  # reject 意见写进重跑上下文
+    timeout:
+      after: 7d
+      action: hold               # 默认 hold,不自动拒绝
+      notify: true               # 主动提醒
+    audit: true                  # 所有放行(含 auto_check)留痕到日志
+```
+
+---
+
 ## 待讨论清单(按依赖顺序)
 
 核心设计:
@@ -272,10 +322,10 @@ created
 - [x] 2. 目录 Schema
 - [x] 3. workflow.yaml
 - [x] 4. 方案阶段状态机
-- [ ] 11. 审批门 Gates(下一项)
+- [x] 11. 审批门 Gates
 
 执行机制:
-- [ ] 5. Clarifier 澄清对话机制
+- [ ] 5. Clarifier 澄清对话机制(下一项)
 - [ ] 6. Composer 动态合成机制
 - [ ] 7. Verifier / 方案闭环判定
 - [ ] 8. Executor 适配层(核心已在第 2 项锁定,接口细节待补)
