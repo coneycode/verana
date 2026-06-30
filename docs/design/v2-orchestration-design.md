@@ -650,6 +650,35 @@ run 跑一半进程挂了 → 该 task **整体重跑**,不做 task 内部断点
 
 ---
 
+## 15. 技术栈与实现形态 [LOCKED]
+
+### 语言 / 运行时:Node / TypeScript
+
+擅长本产品都要的事:CLI + Web + 调外部 CLI(executor)+ SSE 事件流。
+LLM 对本产品只是 HTTP 调用,不需要 Python 生态。
+
+### 状态存储:纯文件(yaml/json)
+
+- 项目目录即真相,契合"透明可审计"卖点;状态用 yaml 落在目录里,人可直接看、可 git
+- 多项目列表靠扫描目录;SQLite 索引留到项目多了再加
+
+### LLM 调用层:薄 client 抽象
+
+- 配 base_url + model + key;composer model 与 evaluator model 各配各的,支持不同源(第6项要求)
+
+### 代码策略:从零写,不复用旧 spike 代码
+
+- 旧 spike 是单阶段/内存态/硬编码 Claude Code,数据模型、状态机、存储全变了;
+  在旧地基上改比从零写更慢
+- 代码从**设计文档**长出来(符合文档驱动工作流),不从旧代码长出来
+- 只**借鉴验证过的架构思路**(一行旧代码不抄):
+  - Fastify + SSE 实时事件流
+  - AgentReport / Verdict 双对象(claim vs verdict,第7项已继承)
+  - 隔离 workdir + 每任务 git 快照(implementation 阶段用)
+  - LLM 当 planning brain、JSON 提取鲁棒处理(踩过的坑)
+
+---
+
 ## 待讨论清单(按依赖顺序)
 
 核心设计:
@@ -672,5 +701,5 @@ run 跑一半进程挂了 → 该 task **整体重跑**,不做 task 内部断点
 - [~] 14. 跨项目知识沉淀(第一版手动)
 
 落地:
-- [ ] 15. 技术栈与实现形态(下一项)
-- [ ] 10. 第二阶段:代码/自动化交付闭环
+- [x] 15. 技术栈与实现形态
+- [ ] 10. 第二阶段:代码/自动化交付闭环(下一项)
