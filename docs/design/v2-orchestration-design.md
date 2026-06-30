@@ -535,6 +535,46 @@ Claude Code 留作第二个(implementation 阶段代码交付更合适)。
 
 ---
 
+## 12. 控制面 / 交互入口 [LOCKED]
+
+决定产品形态:用户怎么交互、长任务怎么看进度和介入。
+
+### 形态 = 选项 C(CLI 优先,Web 留接口)
+
+- 第一版**纯 CLI** 验证闭环
+- 后端从一开始做成 **API + 事件流(SSE)** 架构,逻辑不写死在 CLI 里
+- 继承旧 spike 的 **Fastify + SSE** 骨架(后端思路照搬,前端先不做),Web UI 以后无缝接入
+
+### 长任务推送
+
+- 第一版:CLI 主动查(`verana status`)+ 本地事件流
+- 推送通道(Telegram/邮件等)留到有需要再加(避免早期过度集成)
+
+### 多项目总览
+
+项目制 + 长任务 → 必然多项目并行,需要 `verana list` 总览所有项目状态。
+
+### CLI 命令草案(实现时会调)
+
+```
+verana new [目标]          # 创建项目,进入澄清对话
+verana clarify <id>        # 继续澄清(回答 Clarifier 的问题)
+verana list                # 所有项目状态总览
+verana status <id>         # 单项目详情:当前阶段/阻塞/进度/在等什么
+verana plan <id>           # 查看 Composer 生成的 workflow + 自检评分报告
+verana approve <id> [gate] # 通过一道门
+verana reject <id> [gate]  # 打回(带反馈,触发 bounce 重跑)
+verana input <id> [信息]   # 给 awaiting_input 的项目补充信息
+verana run <id>            # 启动/继续执行(跑 DAG)
+verana logs <id> [run]     # 看某 run 的 claim/verdict/日志
+verana cancel <id>         # 取消项目
+```
+
+后端 API 一一对应这些动作 + 一条 SSE 事件流(继承旧 spike 的 ProjectEvent:
+status_changed / task_updated / approval_required / verdict / log 等)。
+
+---
+
 ## 待讨论清单(按依赖顺序)
 
 核心设计:
@@ -551,8 +591,8 @@ Claude Code 留作第二个(implementation 阶段代码交付更合适)。
 - [x] 8. Executor 适配层
 
 支撑能力:
-- [ ] 12. 控制面 / 交互入口(下一项)
-- [ ] 13. 权限与安全边界
+- [x] 12. 控制面 / 交互入口
+- [ ] 13. 权限与安全边界(下一项)
 - [ ] 9. 长任务运行与恢复
 - [ ] 14. 跨项目知识沉淀
 
