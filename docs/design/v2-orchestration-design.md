@@ -429,6 +429,51 @@ shared/ 已有 agents/skills/scripts、能力矩阵(可用 executors)。
 
 ---
 
+## 7. Verifier / 方案闭环判定 [LOCKED]
+
+产品灵魂:**agent 说"完成"只是 claim,verifier 的 verdict 才是真相**。
+
+特殊性:方案阶段交付 research(文档/调研),不是代码,没法跑单元测试。
+这是方案阶段 verifier 的核心难点 —— 主力靠 llm_rubric。
+
+### 验证方法(对应 task.checks 和 goal.acceptance)
+
+| method | 怎么验 | 适合 |
+|--------|--------|------|
+| command | 跑命令,exit 0 = 过 | 脚本产物、PoC、数据 schema 校验 |
+| file_exists | 产物文件/目录真实存在且非空 | 确认 findings.md、evidence/ 非空壳 |
+| llm_rubric | 独立 evaluator 模型按 rubric 打分 | research 质量验收(主力) |
+| manual | 人工判定,人点头才是 verdict | 最终方案确认、主观质量 |
+
+- **llm_rubric 用独立 evaluator 模型**(同 Composer 评测那套),
+  verdict 必附"**判定理由 + 引用证据**"(指出报告哪段满足/不满足),不只给 pass/fail,可复核
+- 一个 task 的 checks **支持多方法组合**,每条声明自己的 method,**全过才算 task 过**
+
+### claim vs verdict(反黑盒核心)
+
+- `runs/<run-id>/claim.md` — agent 自我汇报(原话,UNVERIFIED)
+- `runs/<run-id>/verdict.yaml` — verifier 独立判定(pass/fail + 理由 + 证据,source of truth)
+- **UI 并排展示**两者,把差距显式暴露:"agent 说做到 X / verifier 判定 Y"
+- 黑盒 = agent 说完成你就信;白盒 = 它说的和真相摆一起给人看
+- (继承旧 spike 的 AgentReport/Verdict 双对象设计)
+
+### FAIL 后自动重跑(有上限,会升级)
+
+FAIL 分两种性质:
+- **可重跑**:agent 偷懒/漏做/质量不够 → 重跑能补齐
+- **重跑也没用**:任务本身设计有问题(如要求调研一个根本不开放的 API)→ 重跑空转
+
+机制:
+1. FAIL → 带 verdict 的差距说明作为**反馈写进上下文**,自动重跑
+2. **重跑上限 2 次**(比 Composer 的 3 次小,因为跑 agent 更耗时耗钱)
+3. 超限仍 FAIL → **不再自动重跑,升级到人工**(awaiting_input/blocked):
+   人判断 —— 任务设计错了改 workflow / 目标不现实回 Clarifier / 放弃该 task
+4. 每次重跑是一个**新 run**(claim/verdict 各存一份),留痕可见"为什么还不过"
+
+原则:自动重跑解决"质量不够",人工升级解决"任务本身有问题";不无限重跑(否则又成黑盒)。
+
+---
+
 ## 待讨论清单(按依赖顺序)
 
 核心设计:
@@ -441,8 +486,8 @@ shared/ 已有 agents/skills/scripts、能力矩阵(可用 executors)。
 执行机制:
 - [x] 5. Clarifier 澄清对话机制
 - [x] 6. Composer 动态合成机制
-- [ ] 7. Verifier / 方案闭环判定(下一项)
-- [ ] 8. Executor 适配层(核心已在第 2 项锁定,接口细节待补)
+- [x] 7. Verifier / 方案闭环判定
+- [ ] 8. Executor 适配层(核心已在第 2 项锁定,接口细节待补)(下一项)
 
 支撑能力:
 - [ ] 12. 控制面 / 交互入口
