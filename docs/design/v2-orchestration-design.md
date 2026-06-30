@@ -474,6 +474,67 @@ FAIL 分两种性质:
 
 ---
 
+## 8. Executor 适配层 [LOCKED]
+
+核心机制见第 2 项(能力矩阵、adapter 翻译、不写专用格式、反向选)。本项补接口与执行细节。
+
+### adapter 接口
+
+```
+interface ExecutorAdapter {
+  name: string                       // "hermes" | "claude-code" | "opencode"
+  capabilities: CapabilityDecl       // 第2项能力声明(手填)
+  probe(): ProbeResult               // 启动时检测:装没装、版本、可用性
+  prepare(agentCfg, workdir): void   // 翻译:skill 放原生路径、拼启动参数、注入权限
+  execute(agentCfg, workdir): AgentRun  // 启动 executor,跑一个 task
+  collect(run): AgentClaim           // 收集产物 + agent 自我汇报(claim)
+}
+```
+
+### 执行一个 task 的流程
+
+1. Composer 已选定 executor
+2. `prepare`:把 task 需要的 skill 同步到 executor 原生路径(如 ~/.hermes/skills/),
+   把 agent 的 system prompt / 工具权限 / 模型拼成启动参数,**权限提前注入**
+3. `execute`:在隔离 workdir 启动 executor 跑一次性命令(非交互)
+4. `collect`:收产物 + agent claim(写 claim.md)
+5. 交 verifier 独立判定(第7项);verifier 不信 adapter 收上来的 claim
+
+### workdir(选项:项目级)
+
+- workdir 以**项目为单位**(`projects/<id>/` 即 workdir),task 产物按 outputs 路径写入
+- research 阶段**不强制 git**;implementation 阶段再引入 git 隔离
+
+### 调用方式:一次性命令
+
+- adapter 统一用一次性命令模式(`hermes chat -q` / `claude -p`),非交互
+- 长任务靠 executor 自身机制(后台/长会话),adapter 轮询或等待
+
+### 交互处理(两层,分清)
+
+**层面1:executor 内部工具批准** → **不交互**。prepare 阶段提前注入权限;
+授权内自己跑,不弹窗;超范围操作**直接拒绝**(不等人批)。
+
+**层面2:任务级缺信息**(agent 需用户决策才能继续)→ executor **不挂起等 stdin**,而是:
+1. agent 把"需要什么信息才能继续"作为 run 产出汇报(写进 claim),run **正常结束**,标记 `needs_input`
+2. adapter.collect 发现 needs_input → task 进 `awaiting_input`,workflow 在此暂停
+3. 系统把所需信息推给用户(第12项控制面 + 主动提醒)
+4. 用户补充 → 写进 task inputs/上下文
+5. 重跑该 task(新 run),带上补充信息
+
+为什么不让 executor 真交互式等待:长任务可能等几小时/几天,进程挂着等 stdin 脆弱
+(崩溃/重启就丢);run 结束 + 状态暂停 + 信息落盘(status.yaml 记在等什么),可跨重启恢复(第9项)。
+前提:system prompt 约束 agent "遇到必须用户定的信息就停下汇报,不要臆测"。
+
+- `needs_input` 是 run 的一种**正常结束**(不是 failed,单独标记)
+
+### 第一版
+
+主攻 **Hermes**(覆盖 web/browser/cron/长任务/skills,正好对应方案阶段);
+Claude Code 留作第二个(implementation 阶段代码交付更合适)。
+
+---
+
 ## 待讨论清单(按依赖顺序)
 
 核心设计:
@@ -487,10 +548,10 @@ FAIL 分两种性质:
 - [x] 5. Clarifier 澄清对话机制
 - [x] 6. Composer 动态合成机制
 - [x] 7. Verifier / 方案闭环判定
-- [ ] 8. Executor 适配层(核心已在第 2 项锁定,接口细节待补)(下一项)
+- [x] 8. Executor 适配层
 
 支撑能力:
-- [ ] 12. 控制面 / 交互入口
+- [ ] 12. 控制面 / 交互入口(下一项)
 - [ ] 13. 权限与安全边界
 - [ ] 9. 长任务运行与恢复
 - [ ] 14. 跨项目知识沉淀
