@@ -679,6 +679,37 @@ LLM 对本产品只是 HTTP 调用,不需要 Python 生态。
 
 ---
 
+## 10. 第二阶段:代码/自动化交付闭环 [OUTLINE — 第一版不实现,仅预留接口]
+
+方案闭环后的延伸。第一版不实现,此处记录轮廓 + 衔接点 + 差异,确保方案阶段设计能平滑接入,不返工。
+
+### 同一 project 下两个 workflow(根基)
+
+方案阶段(solution/)和实现阶段(implementation/)是**同一个 project 下的两个 workflow**,
+共享 goal / agents / skills / scripts / 上下文。实现阶段大量引用方案产出,不另起 project
+(割裂上下文)。(第 1 项已定)
+
+### handoff(方案 → 实现)
+
+- 方案 approved 后,solution.md 已含"下一阶段实施任务拆解"(goal.acceptance 要求)
+- handoff 动作:基于拆解创建 implementation/ 目录 + 生成 deliverable_type=implementation 的 workflow.yaml
+
+### 与方案阶段的差异(机制已埋好)
+
+| 维度 | 方案阶段 | 实现阶段 |
+|------|---------|---------|
+| executor | Hermes | Claude Code(能力矩阵自动切) |
+| agent roster | researcher/analyst/critic | planner/builder/reviewer |
+| verifier 主力 | llm_rubric | command/tests + anti-cheat(检测改测试文件作弊) |
+| workdir | 不强制 git | git 隔离 + 每任务 diff + 检查点提交 |
+| gate | plan/solution review | 增加 per-task diff 审批 |
+
+### 通用复用(不用重做)
+
+workflow schema、DAG、状态机、gates、claim/verdict、长任务恢复、Composer 三层自检 —— 全通用。
+
+---
+
 ## 待讨论清单(按依赖顺序)
 
 核心设计:
@@ -702,4 +733,10 @@ LLM 对本产品只是 HTTP 调用,不需要 Python 生态。
 
 落地:
 - [x] 15. 技术栈与实现形态
-- [ ] 10. 第二阶段:代码/自动化交付闭环(下一项)
+- [~] 10. 第二阶段:代码/自动化交付闭环(轮廓预留,第一版不实现)
+
+---
+
+所有设计项已讨论完毕。第一版实现范围:方案交付闭环
+(Clarifier → Composer → Executor(Hermes) → Verifier,CLI + 文件状态)。
+推迟/预留:13 权限安全、14 自动沉淀、10 实现阶段。
