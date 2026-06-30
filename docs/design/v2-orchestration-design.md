@@ -335,7 +335,8 @@ Project 状态只表达"走到哪个大阶段",细节在 workflow 状态里。
 
 ```
 主流程:
-clarifying          Clarifier 多轮澄清(仅 solution workflow 的首个;implementation 通常跳过)
+clarifying          Clarifier 多轮澄清(solution workflow 首个必经;implementation 按需——
+                    方案 handoff 来的目标通常无需澄清,但若执行中发现方案有问题可触发澄清)
   → goal_confirm    输出目标确认摘要,用户点头 ← 门:goal_confirm(轻)
   → composing       Composer 生成 workflow + agent/skill/script
   → plan_review     人审任务拆解 ← 门:plan_review
