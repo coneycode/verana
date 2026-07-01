@@ -99,6 +99,8 @@ let selectedId = null;
 let state = null;
 let source = null;
 let busy = false;
+let workflowSpec = null;
+let activeRunId = null;
 const $ = (id) => document.getElementById(id);
 
 const STEPS = [
@@ -126,6 +128,7 @@ async function loadProjects() {
 
 async function selectProject(id) {
   selectedId = id;
+  workflowSpec = null;
   $('empty').style.display='none';
   $('detail').style.display='flex';
   await refresh();
@@ -136,6 +139,11 @@ async function selectProject(id) {
 async function refresh() {
   if (!selectedId) return;
   state = await api('/projects/'+selectedId);
+  // Load workflow spec if in plan_review or later
+  const phase = getPhase();
+  if (phase && !['created','clarifying'].includes(phase) && !workflowSpec) {
+    try { workflowSpec = await api('/projects/'+selectedId+'/workflow'); } catch(e) { workflowSpec = null; }
+  }
   render();
   await loadProjects();
 }
@@ -203,8 +211,9 @@ function renderGuide() {
   }
 
   if (phase === 'executing') {
-    el.innerHTML = '<div class="guide"><div class="guide-title">第 5 步:执行中</div><div class="guide-desc">系统正在按 DAG 逐个执行 task,每个 task 完成后独立验证。请等待...</div><button class="secondary" id="runContinueBtn">继续执行</button></div>';
+    el.innerHTML = '<div class="guide"><div class="guide-title">第 5 步:执行中</div><div class="guide-desc">系统正在按 DAG 逐个执行 task,每个 task 完成后独立验证。点击下方按钮查看实时输出。</div><div class="row"><button class="secondary" id="runContinueBtn">继续执行</button><button class="secondary" id="viewStreamBtn">查看实时输出</button></div></div>';
     $('runContinueBtn').onclick = () => doRun();
+    $('viewStreamBtn').onclick = () => loadActiveStream();
     return;
   }
 
@@ -248,16 +257,46 @@ function renderTasks() {
   const tasks = wf?.tasks || {};
   const vals = Object.values(tasks);
   if (vals.length === 0) { $('tasks').innerHTML = '<div class="muted">暂无 task。</div>'; return; }
-  $('tasks').innerHTML = '<table><tr><th>Task</th><th>Status</th><th>Runs</th></tr>' + vals.map(t => {
-    const cls = t.status === 'delivered' ? 'ok' : (t.status === 'failed' ? 'warn' : '');
-    return '<tr><td>'+escapeHtml(t.id)+'</td><td><span class="pill '+cls+'">'+escapeHtml(t.status)+'</span></td><td>'+((t.runs||[]).map(r => '<button class="secondary run-log" data-run="'+escapeHtml(r)+'" style="padding:2px 8px;font-size:12px;margin:1px">'+escapeHtml(r)+'</button>').join(' '))+'</td></tr>';
-  }).join('') + '</table>';
+
+  // If we have workflow spec, show full task cards with desc/outputs/checks
+  if (workflowSpec && workflowSpec.tasks) {
+    $('tasks').innerHTML = workflowSpec.tasks.map(task => {
+      const rt = tasks[task.id];
+      const status = rt?.status || 'pending';
+      const cls = status === 'delivered' ? 'ok' : (status === 'failed' ? 'warn' : (status === 'running' ? '' : ''));
+      const runs = (rt?.runs || []).map(r => '<button class="secondary run-log" data-run="'+escapeHtml(r)+'" style="padding:2px 8px;font-size:12px;margin:1px">'+escapeHtml(r)+'</button>').join(' ');
+      const deps = (task.depends_on||[]).length ? '<span class="muted">依赖: '+escapeHtml((task.depends_on||[]).join(', '))+'</span>' : '';
+      const outputs = (task.outputs||[]).map(o => '<div class="muted" style="font-size:12px">产出: '+escapeHtml(o.path)+' — '+escapeHtml(o.desc)+'</div>').join('');
+      const checks = (task.checks||[]).map(c => '<div class="muted" style="font-size:12px">验收: ['+escapeHtml(c.method)+'] '+escapeHtml(c.desc)+'</div>').join('');
+      return '<div style="padding:10px;border:1px solid #293a57;border-radius:8px;margin-bottom:8px">'+
+        '<div class="row" style="justify-content:space-between"><b>'+escapeHtml(task.id)+' — '+escapeHtml(task.agent)+'</b><span class="pill '+cls+'">'+escapeHtml(status)+'</span></div>'+
+        '<div style="margin:6px 0">'+escapeHtml(task.desc)+'</div>'+
+        outputs+checks+deps+
+        (runs ? '<div style="margin-top:4px">'+runs+'</div>' : '')+
+        '</div>';
+    }).join('');
+  } else {
+    $('tasks').innerHTML = '<table><tr><th>Task</th><th>Status</th><th>Runs</th></tr>' + vals.map(t => {
+      const cls = t.status === 'delivered' ? 'ok' : (t.status === 'failed' ? 'warn' : '');
+      return '<tr><td>'+escapeHtml(t.id)+'</td><td><span class="pill '+cls+'">'+escapeHtml(t.status)+'</span></td><td>'+((t.runs||[]).map(r => '<button class="secondary run-log" data-run="'+escapeHtml(r)+'" style="padding:2px 8px;font-size:12px;margin:1px">'+escapeHtml(r)+'</button>').join(' '))+'</td></tr>';
+    }).join('') + '</table>';
+  }
   document.querySelectorAll('.run-log').forEach(el => el.addEventListener('click', () => loadLog(el.dataset.run)));
 }
 
 async function loadLog(runId) {
   const log = await api('/projects/'+selectedId+'/runs/'+runId);
-  $('logsBox').textContent = 'Claim:\\n' + log.claim + '\\n\\nVerdict:\\n' + JSON.stringify(log.verdict, null, 2) + '\\n\\nLog:\\n' + log.log;
+  const parts = [];
+  if (log.stream) parts.push('=== 实时输出 ===\n' + log.stream);
+  if (log.claim) parts.push('=== Claim ===\n' + log.claim);
+  if (log.verdict) parts.push('=== Verdict ===\n' + JSON.stringify(log.verdict, null, 2));
+  $('logsBox').textContent = parts.join('\n\n') || '暂无日志。';
+}
+
+async function loadActiveStream() {
+  if (!activeRunId) { $('logsBox').textContent = '暂无正在执行的 run。'; return; }
+  const stream = await api('/projects/'+selectedId+'/runs/'+activeRunId+'/stream');
+  $('logsBox').textContent = stream || '暂无输出，正在等待 LLM 响应...';
 }
 
 async function maybeAutoStartClarify() {
@@ -332,7 +371,14 @@ function connectEvents() {
   $('connection').textContent = 'SSE: connecting';
   source.onopen = () => $('connection').textContent = 'SSE: connected';
   source.onerror = () => $('connection').textContent = 'SSE: disconnected';
-  ['snapshot','project_created','plan_composed','gate_approved','gate_rejected','run_completed','input_recorded'].forEach(type => source.addEventListener(type, () => { appendEvent(type); refresh(); }));
+  ['snapshot','project_created','plan_composed','gate_approved','gate_rejected','run_completed','input_recorded','task_updated','status_changed'].forEach(type => source.addEventListener(type, () => { appendEvent(type); refresh(); }));
+  source.addEventListener('llm_stream', (event) => {
+    const data = JSON.parse(event.data);
+    appendEvent('llm_stream: ' + (data.payload?.message || ''));
+    if (data.payload?.runId) activeRunId = data.payload.runId;
+    // If logsBox is showing the active stream, auto-refresh it
+    if (data.payload?.content) { $('logsBox').textContent = data.payload.content; }
+  });
 }
 function appendEvent(type) { $('eventsBox').textContent = '['+new Date().toLocaleTimeString()+'] '+type+'\\\\n' + $('eventsBox').textContent; }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }

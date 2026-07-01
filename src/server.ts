@@ -94,19 +94,28 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   });
 
   app.post<{ Params: { id: string } }>("/projects/:id/run", async (request) => {
-    await runProject(options.rootDir, request.params.id, client);
+    await runProject(options.rootDir, request.params.id, client, bus);
     bus.publish(projectEvent("run_completed", request.params.id));
     return getProject(options.rootDir, request.params.id);
   });
 
   app.get<{ Params: { id: string; run: string } }>("/projects/:id/runs/:run", async (request) => {
     const runDir = join(projectPath(options.rootDir, request.params.id), "runs", request.params.run);
-    const [claim, verdict, log] = await Promise.all([
-      readFile(join(runDir, "claim.md"), "utf8"),
-      readFile(join(runDir, "verdict.yaml"), "utf8").then((content) => parse(content)),
-      readFile(join(runDir, "log.md"), "utf8"),
-    ]);
-    return { claim, verdict, log };
+    const claim = await readFile(join(runDir, "claim.md"), "utf8").catch(() => "");
+    const verdict = await readFile(join(runDir, "verdict.yaml"), "utf8").then((c) => parse(c)).catch(() => null);
+    const stream = await readFile(join(runDir, "stream.md"), "utf8").catch(() => "");
+    return { claim, verdict, stream };
+  });
+
+  app.get<{ Params: { id: string; run: string } }>("/projects/:id/runs/:run/stream", async (request) => {
+    const streamPath = join(projectPath(options.rootDir, request.params.id), "runs", request.params.run, "stream.md");
+    return readFile(streamPath, "utf8").catch(() => "");
+  });
+
+  app.get<{ Params: { id: string } }>("/projects/:id/workflow", async (request) => {
+    const wfPath = join(projectPath(options.rootDir, request.params.id), "solution", "workflow.yaml");
+    const raw = await readFile(wfPath, "utf8");
+    return parse(raw);
   });
 
   app.post<{ Body: { goal: string } }>("/projects", async (request) => {

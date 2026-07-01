@@ -21,6 +21,7 @@ const SYSTEM_PROMPT = `你是一个方案澄清助手。你的任务是根据用
 - 一次只提一个问题
 - 问题必须针对用户的具体目标,不要问通用问题
 - risk 必须具体,说明不澄清会导致什么实际后果
+- **不要问已经在"已澄清记录"里出现过的问题或高度相似的问题**——每次提问前检查下方列表,避开已覆盖的维度
 - 如果目标已经足够清晰(关键维度都有信息),返回 {"done": true}
 - 用中文回答`;
 
@@ -57,16 +58,16 @@ function buildUserPrompt(state: ProjectState): string {
   const clarifications = state.status.clarifier?.clarifications ?? [];
   const lines = [`目标: ${state.project.goal}`, ""];
   if (clarifications.length > 0) {
-    lines.push("已澄清:");
+    lines.push("已澄清记录(不要重复问这些方向):");
     for (const entry of clarifications) {
-      lines.push(`  Q: ${entry.q}`);
-      lines.push(`  A: ${entry.a}`);
+      lines.push(`  - Q: ${entry.q}`);
+      lines.push(`    A: ${entry.a}`);
     }
   } else {
     lines.push("尚未澄清任何问题。");
   }
   lines.push("");
   lines.push(`已澄清轮数: ${clarifications.length}(软上限 7)`);
-  lines.push("请判断下一步:如果目标已足够清晰返回 done=true,否则提出一个最关键的待澄清问题。");
+  lines.push("请判断下一步:如果目标已足够清晰返回 done=true,否则提出一个**与已澄清记录不重复**的最关键待澄清问题。");
   return lines.join("\n");
 }

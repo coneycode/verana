@@ -1,8 +1,9 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse } from "yaml";
 
 import type { LlmClient } from "./llm.js";
+import { EventBus, projectEvent } from "./events.js";
 import { getProject, projectPath, saveProjectState, writeYaml } from "./project-store.js";
 import type { GateRecord, TaskSpec, VerdictRecord, WorkflowRecord, WorkflowSpec } from "./types.js";
 import { validateWorkflowSpec } from "./workflow-validator.js";
@@ -161,7 +162,7 @@ async function writeSkill(projectDir: string, name: string, title: string, body:
   await writeFile(join(dir, "SKILL.md"), `---\nname: ${name}\n---\n\n# ${title}\n\n${body}\n`, "utf8");
 }
 
-export async function runProject(rootDir: string, projectId: string, client: LlmClient): Promise<void> {
+export async function runProject(rootDir: string, projectId: string, client: LlmClient, bus?: EventBus): Promise<void> {
   const state = await getProject(rootDir, projectId);
   const workflow = state.status.workflows.solution;
   if (!workflow) throw new Error("Solution workflow does not exist");
@@ -178,20 +179,29 @@ export async function runProject(rootDir: string, projectId: string, client: Llm
     state.status.active_task = task.id;
     task.status = "running";
     await saveProjectState(rootDir, state);
+    bus?.publish(projectEvent("task_updated", projectId, { taskId: task.id, status: "running", runId }));
 
-    await executeLlmTask(rootDir, projectId, runId, taskSpec, spec, client);
+    await executeLlmTask(rootDir, projectId, runId, taskSpec, spec, client, bus);
     task.status = "verifying";
-    const verdict = await verifyLlmTask(rootDir, projectId, runId, taskSpec, client);
+    await saveProjectState(rootDir, state);
+    bus?.publish(projectEvent("task_updated", projectId, { taskId: task.id, status: "verifying", runId }));
+
+    const verdict = await verifyLlmTask(rootDir, projectId, runId, taskSpec, client, bus);
     task.runs = [...(task.runs ?? []), runId];
     task.status = verdict.passed ? "delivered" : "failed";
     await saveProjectState(rootDir, state);
+    bus?.publish(projectEvent("task_updated", projectId, { taskId: task.id, status: task.status, runId, verdict }));
+
+    // If task failed, stop (on_failure: stop_and_report)
+    if (!verdict.passed) break;
   }
 
   if (Object.values(workflow.tasks).every((task) => task.status === "delivered")) {
     workflow.status = "final_review";
     state.status.active_task = null;
+    await saveProjectState(rootDir, state);
+    bus?.publish(projectEvent("status_changed", projectId, { status: "final_review" }));
   }
-  await saveProjectState(rootDir, state);
 }
 
 async function readWorkflowSpec(rootDir: string, projectId: string): Promise<WorkflowSpec> {
@@ -212,10 +222,12 @@ const EXECUTOR_SYSTEM = `你是一个方案调研执行者。根据 task 描述,
 - 如果是分析 task,给出对比表、推荐方案和理由、实施任务拆解
 - 如果是审查 task,列出假设、遗漏、风险`;
 
-async function executeLlmTask(rootDir: string, projectId: string, runId: string, task: TaskSpec, spec: WorkflowSpec, client: LlmClient): Promise<void> {
+async function executeLlmTask(rootDir: string, projectId: string, runId: string, task: TaskSpec, spec: WorkflowSpec, client: LlmClient, bus?: EventBus): Promise<void> {
   const dir = projectPath(rootDir, projectId);
   const runDir = join(dir, "runs", runId);
   await mkdir(runDir, { recursive: true });
+  const streamPath = join(runDir, "stream.md");
+  await writeFile(streamPath, `# Run ${runId} — Task ${task.id}\n\n## 执行中...\n\n`, "utf8");
 
   const inputContents: string[] = [];
   for (const input of task.inputs ?? []) {
@@ -239,7 +251,13 @@ async function executeLlmTask(rootDir: string, projectId: string, runId: string,
     "请产出本 task 的交付物内容。",
   ].join("\n");
 
+  bus?.publish(projectEvent("llm_stream", projectId, { runId, taskId: task.id, phase: "executing", message: "正在调用 LLM 生成交付物..." }));
+
   const content = await client.complete("composer", EXECUTOR_SYSTEM, userPrompt);
+
+  // Write full LLM output to stream.md and publish event
+  await appendFile(streamPath, `\n## LLM 原始输出\n\n${content}\n`, "utf8");
+  bus?.publish(projectEvent("llm_stream", projectId, { runId, taskId: task.id, phase: "executing", message: "LLM 输出完成，正在写入交付物...", content }));
 
   for (const output of task.outputs) {
     const outputPath = join(dir, output.path);
@@ -253,7 +271,7 @@ async function executeLlmTask(rootDir: string, projectId: string, runId: string,
   }
 
   await writeFile(join(runDir, "claim.md"), `# Claim\n\nTask ${task.id} executed by LLM.\n\nAgent: ${task.agent}\n\nClaim: ${content.slice(0, 200)}...\n`, "utf8");
-  await writeFile(join(runDir, "log.md"), `# Log\n\nExecuted ${task.id} via LLM.\n`, "utf8");
+  await appendFile(streamPath, `\n## 交付物已写入\n\n${task.outputs.map(o => o.path).join(", ")}\n`, "utf8");
 }
 
 const VERIFIER_SYSTEM = `你是一个独立的验收者(verifier)。你的任务是判断 task 的交付物是否满足验收标准。
@@ -267,8 +285,10 @@ const VERIFIER_SYSTEM = `你是一个独立的验收者(verifier)。你的任务
 - reasons 要具体,说明哪些满足了、哪些没满足
 - 用中文`;
 
-async function verifyLlmTask(rootDir: string, projectId: string, runId: string, task: TaskSpec, client: LlmClient): Promise<VerdictRecord> {
+async function verifyLlmTask(rootDir: string, projectId: string, runId: string, task: TaskSpec, client: LlmClient, bus?: EventBus): Promise<VerdictRecord> {
   const dir = projectPath(rootDir, projectId);
+  const runDir = join(dir, "runs", runId);
+  const streamPath = join(runDir, "stream.md");
 
   const outputContents: string[] = [];
   for (const output of task.outputs) {
@@ -295,7 +315,12 @@ async function verifyLlmTask(rootDir: string, projectId: string, runId: string, 
     "请独立判断交付物是否满足验收标准。",
   ].join("\n");
 
+  bus?.publish(projectEvent("llm_stream", projectId, { runId, taskId: task.id, phase: "verifying", message: "正在调用验证模型判定..." }));
+
   const llmResult = await client.completeJson<{ passed: boolean; reasons: string[]; evidence: string[] }>("evaluator", VERIFIER_SYSTEM, userPrompt);
+
+  await appendFile(streamPath, `\n## 验证结果\n\npassed: ${llmResult.passed}\nreasons: ${(llmResult.reasons ?? []).join("; ")}\n`, "utf8");
+  bus?.publish(projectEvent("llm_stream", projectId, { runId, taskId: task.id, phase: "verifying", message: `验证完成: ${llmResult.passed ? "通过" : "未通过"}` }));
 
   const verdict: VerdictRecord = {
     passed: llmResult.passed,
