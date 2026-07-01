@@ -3,6 +3,10 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parse } from "yaml";
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export type ModelRole = "composer" | "evaluator";
 
 export interface ModelConfig {
@@ -65,26 +69,36 @@ export class HttpLlmClient implements LlmClient {
       messages: [{ role: "user", content: user }],
     };
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": cfg.api_key,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify(body),
-    });
+    const maxRetries = 3;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": cfg.api_key,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify(body),
+      });
 
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`LLM ${role} call failed (${res.status}): ${text.slice(0, 500)}`);
+      if (res.status === 429 && attempt < maxRetries) {
+        console.log(`[llm] ${role} got 429, waiting 60s before retry (${attempt + 1}/${maxRetries})...`);
+        await sleep(60_000);
+        continue;
+      }
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`LLM ${role} call failed (${res.status}): ${text.slice(0, 500)}`);
+      }
+
+      const data = (await res.json()) as { content: Array<{ type: string; text?: string }> };
+      const textBlock = data.content?.find((block) => block.type === "text");
+      const content = textBlock?.text;
+      if (!content) throw new Error(`LLM ${role} returned empty content`);
+      return content;
     }
-
-    const data = (await res.json()) as { content: Array<{ type: string; text?: string }> };
-    const textBlock = data.content?.find((block) => block.type === "text");
-    const content = textBlock?.text;
-    if (!content) throw new Error(`LLM ${role} returned empty content`);
-    return content;
+    throw new Error(`LLM ${role} call failed: exhausted 429 retries`);
   }
 
   async completeJson<T = unknown>(role: ModelRole, system: string, user: string): Promise<T> {
