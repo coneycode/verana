@@ -46,7 +46,10 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     const state = await getProject(options.rootDir, request.params.id);
     const question = await nextClarificationQuestion(state, client);
     if (question && !state.status.clarifier) {
-      state.status.clarifier = { status: "clarifying", clarifications: [] };
+      state.status.clarifier = { status: "clarifying", clarifications: [], current_question: question };
+      await saveProjectState(options.rootDir, state);
+    } else if (question && state.status.clarifier) {
+      state.status.clarifier.current_question = question;
       await saveProjectState(options.rootDir, state);
     }
     bus.publish(projectEvent("clarify_started", request.params.id));
@@ -57,9 +60,12 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     const state = await getProject(options.rootDir, request.params.id);
     const next = await nextClarificationQuestion(state, client);
     const updated = appendClarification(state, request.body.answer, next);
+    if (updated.status.clarifier) {
+      updated.status.clarifier.current_question = next;
+    }
     await saveProjectState(options.rootDir, updated);
     bus.publish(projectEvent("input_recorded", request.params.id));
-    return updated;
+    return { state: updated, next_question: next };
   });
 
   app.post<{ Params: { id: string } }>("/projects/:id/plan", async (request) => {

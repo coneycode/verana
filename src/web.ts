@@ -181,10 +181,12 @@ function renderGuide() {
   }
 
   if (phase === 'clarifying') {
-    el.innerHTML = '<div class="guide"><div class="guide-title">第 2 步:澄清目标</div><div class="guide-desc" id="clarifyQuestion">正在获取问题...</div><div class="risk-box" id="clarifyRisk" style="display:none"></div><input id="answer" placeholder="输入你的回答" /><div class="row" style="margin-top:8px"><button id="answerBtn">提交回答</button><button class="secondary" id="finishClarifyBtn">跳过,直接生成 Plan</button></div></div>';
-    $('answerBtn').onclick = () => doAnswer();
+    const cq = state.status.clarifier?.current_question;
+    const qText = cq ? cq.question : '';
+    const rText = cq ? cq.risk : '';
+    el.innerHTML = '<div class="guide"><div class="guide-title">第 2 步:澄清目标</div><div class="guide-desc" id="clarifyQuestion">'+escapeHtml(qText || '目标已足够清晰,可直接生成 Plan。')+'</div><div class="risk-box" id="clarifyRisk" style="display:'+(rText?'block':'none')+'">⚠ '+escapeHtml(rText)+'</div><input id="answer" placeholder="输入你的回答" /><div class="row" style="margin-top:8px"><button id="answerBtn">'+(cq?'提交回答':'直接生成 Plan')+'</button><button class="secondary" id="finishClarifyBtn">跳过,直接生成 Plan</button></div></div>';
+    $('answerBtn').onclick = () => cq ? doAnswer() : doPlan();
     $('finishClarifyBtn').onclick = () => doPlan();
-    loadClarifyQuestion();
     return;
   }
 
@@ -233,22 +235,6 @@ function renderGuide() {
   el.innerHTML = '<div class="guide"><div class="guide-desc muted">未知状态: '+escapeHtml(String(phase))+'</div></div>';
 }
 
-async function loadClarifyQuestion() {
-  try {
-    const r = await api('/projects/'+selectedId+'/clarify');
-    if (r.question) {
-      $('clarifyQuestion').textContent = 'Q: ' + r.question;
-      if (r.risk) { $('clarifyRisk').textContent = '⚠ ' + r.risk; $('clarifyRisk').style.display = 'block'; }
-    } else if (r.summary) {
-      $('clarifyQuestion').innerHTML = '目标已足够清晰,可直接生成 Plan。<pre style="margin-top:8px">'+escapeHtml(r.summary)+'</pre>';
-    } else {
-      $('clarifyQuestion').textContent = '目标已足够清晰。';
-    }
-  } catch (e) {
-    $('clarifyQuestion').textContent = '获取问题失败: ' + e.message;
-  }
-}
-
 function renderClarifier() {
   const clarifier = state.status.clarifier;
   const el = $('clarifierBox');
@@ -281,14 +267,7 @@ async function maybeAutoStartClarify() {
 
 async function doClarify() {
   setBusy(true);
-  try {
-    const r = await post('/projects/'+selectedId+'/clarify');
-    await refresh();
-    if (r.question) {
-      const qEl = $('clarifyQuestion'); if (qEl) qEl.textContent = 'Q: ' + r.question;
-      const rEl = $('clarifyRisk'); if (rEl && r.risk) { rEl.textContent = '⚠ ' + r.risk; rEl.style.display = 'block'; }
-    }
-  }
+  try { await post('/projects/'+selectedId+'/clarify'); await refresh(); }
   catch(e) { alert(e.message); }
   setBusy(false);
 }
@@ -297,7 +276,17 @@ async function doAnswer() {
   const answer = $('answer')?.value.trim();
   if (!answer) return;
   setBusy(true);
-  try { await post('/projects/'+selectedId+'/input', { answer }); await refresh(); }
+  try {
+    const r = await post('/projects/'+selectedId+'/input', { answer });
+    state = r.state;
+    render();
+    await loadProjects();
+    if (r.next_question) {
+      const qEl = $('clarifyQuestion'); if (qEl) qEl.textContent = r.next_question.question;
+      const rEl = $('clarifyRisk'); if (rEl && r.next_question.risk) { rEl.textContent = '⚠ ' + r.next_question.risk; rEl.style.display = 'block'; }
+      const aEl = $('answer'); if (aEl) aEl.value = '';
+    }
+  }
   catch(e) { alert(e.message); }
   setBusy(false);
 }

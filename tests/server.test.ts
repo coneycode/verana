@@ -28,7 +28,7 @@ test("Fastify server with LLM client exposes full solution-delivery loop via API
 
     const inputResponse = await app.inject({ method: "POST", url: `/projects/${created.project.id}/input`, payload: { answer: "YouTube" } });
     assert.equal(inputResponse.statusCode, 200);
-    assert.equal(inputResponse.json().status.clarifier.clarifications.length, 1);
+    assert.equal(inputResponse.json().state.status.clarifier.clarifications.length, 1);
 
     const planResponse = await app.inject({ method: "POST", url: `/projects/${created.project.id}/plan` });
     assert.equal(planResponse.statusCode, 200);

@@ -45,6 +45,7 @@ export interface StatusRecord {
 export interface ClarifierRecord {
   status: "clarifying" | "goal_confirmed";
   clarifications: Array<{ q: string; a: string; risk: string }>;
+  current_question?: { question: string; risk: string } | null;
 }
 
 export interface ProjectState {
