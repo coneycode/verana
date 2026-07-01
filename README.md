@@ -21,6 +21,8 @@ npm test
 npm run typecheck
 npm run build
 
+cp verana.config.example.yaml verana.config.yaml  # then fill in your models + keys
+
 npm run cli -- new "调研海外红人监控系统"
 npm run cli -- list
 npm run cli -- status <project-id>
@@ -38,6 +40,9 @@ npm run cli -- approve <project-id> final_review --note "方案闭环"
 ```sh
 npm run server
 ```
+
+First copy `verana.config.example.yaml` to `verana.config.yaml` and fill in your
+composer/evaluator models (OpenAI-compatible API). Then:
 
 REST/SSE skeleton:
 

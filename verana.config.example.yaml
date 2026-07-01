@@ -1,0 +1,14 @@
+# Verana 配置文件
+# 支持两个模型角色:composer(生成)和 evaluator(评测),必须不同模型(设计文档第 8 节)
+# 接口兼容 OpenAI Chat Completions API(/v1/chat/completions)
+# 复制本文件为 verana.config.yaml 并填入你的配置
+
+composer:
+  base_url: "https://openrouter.ai/api/v1"
+  model: "anthropic/claude-sonnet-4"
+  api_key: "sk-or-xxx"
+
+evaluator:
+  base_url: "https://openrouter.ai/api/v1"
+  model: "openai/gpt-4o"
+  api_key: "sk-or-xxx"

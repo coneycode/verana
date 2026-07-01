@@ -10,6 +10,8 @@ build/
 .env
 .env.*
 !.env.example
+verana.config.yaml
+verana.config.yml
 
 # OS / editor
 .DS_Store
@@ -22,6 +24,7 @@ build/
 
 # project runtime data (generated at runtime, not source)
 projects/
+shared/
 
 # local UI trial temp data
 .tmp-ui

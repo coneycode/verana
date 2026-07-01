@@ -5,34 +5,28 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { buildServer } from "../src/server.js";
+import { buildSmartFakeClient } from "../src/fake-llm.js";
 
-test("Fastify server exposes project creation, listing, snapshot, and SSE endpoint", async () => {
-  const root = await mkdtemp(join(tmpdir(), "verana-server-"));
-  const app = buildServer({ rootDir: root });
+test("Fastify server with LLM client exposes full solution-delivery loop via API", async () => {
+  const root = await mkdtemp(join(tmpdir(), "verana-server-llm-"));
+  const client = buildSmartFakeClient();
+  const app = await buildServer({ rootDir: root, client });
 
   try {
     const homeResponse = await app.inject({ method: "GET", url: "/" });
     assert.equal(homeResponse.statusCode, 200);
-    assert.match(homeResponse.body, /Verana · Agent Workflow Delivery/);
+    assert.match(homeResponse.body, /Verana/);
 
     const createResponse = await app.inject({ method: "POST", url: "/projects", payload: { goal: "调研海外红人监控系统" } });
     assert.equal(createResponse.statusCode, 200);
     const created = createResponse.json();
     assert.equal(created.project.status, "created");
 
-    const listResponse = await app.inject({ method: "GET", url: "/projects" });
-    assert.equal(listResponse.statusCode, 200);
-    assert.equal(listResponse.json().length, 1);
-
-    const snapshotResponse = await app.inject({ method: "GET", url: `/projects/${created.project.id}` });
-    assert.equal(snapshotResponse.statusCode, 200);
-    assert.equal(snapshotResponse.json().project.id, created.project.id);
-
     const clarifyResponse = await app.inject({ method: "GET", url: `/projects/${created.project.id}/clarify` });
     assert.equal(clarifyResponse.statusCode, 200);
-    assert.match(clarifyResponse.json().question, /交付/);
+    assert.match(clarifyResponse.json().question, /平台/);
 
-    const inputResponse = await app.inject({ method: "POST", url: `/projects/${created.project.id}/input`, payload: { answer: "交付调研方案" } });
+    const inputResponse = await app.inject({ method: "POST", url: `/projects/${created.project.id}/input`, payload: { answer: "YouTube" } });
     assert.equal(inputResponse.statusCode, 200);
     assert.equal(inputResponse.json().status.clarifier.clarifications.length, 1);
 

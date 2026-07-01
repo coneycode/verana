@@ -1,3 +1,4 @@
+import type { LlmClient } from "./llm.js";
 import type { ProjectState } from "./types.js";
 
 export interface ClarificationEntry {
@@ -6,41 +7,38 @@ export interface ClarificationEntry {
   risk: string;
 }
 
-export function nextClarificationQuestion(state: ProjectState): { question: string; risk: string } | null {
-  const goal = state.project.goal;
-  const status = state.status.clarifier;
-  const answered = new Set((status?.clarifications ?? []).map((entry) => entry.q));
-
-  const candidates = [
-    {
-      question: "这个自动化流程最终要交付调研方案,还是直接落地实现?",
-      risk: "不澄清交付类型,后续 agent roster、验收标准和 executor 选择都可能偏掉。",
-    },
-    {
-      question: "这个流程覆盖哪些范围,明确不覆盖哪些范围?",
-      risk: "不澄清范围边界,方案容易膨胀,也容易漏掉你真正关心的部分。",
-    },
-    {
-      question: "你已有的数据源、资料、账号或外部约束是什么?",
-      risk: "不澄清输入来源,调研会假设错误的数据条件,实现阶段可能返工。",
-    },
-    {
-      question: "什么样的方案算通过?请给出最重要的验收标准。",
-      risk: "不澄清验收标准,verifier 只能按默认 rubric 判断,可能和你的真实判断标准不一致。",
-    },
-  ];
-
-  if (goal.length > 40 && candidates.length > 0 && !status) return candidates[0] ?? null;
-  return candidates.find((candidate) => !answered.has(candidate.question)) ?? null;
+export interface NextQuestion {
+  question: string;
+  risk: string;
 }
 
-export function appendClarification(state: ProjectState, answer: string): ProjectState {
-  const next = nextClarificationQuestion(state);
-  if (!next) return state;
+const SYSTEM_PROMPT = `你是一个方案澄清助手。你的任务是根据用户的目标,判断还需要澄清什么,然后一次只提一个最关键的问题。
+
+你必须用 JSON 返回,格式:
+{"question": "你的问题", "risk": "如果不澄清这个点,可能造成的具体后果"}
+
+规则:
+- 一次只提一个问题
+- 问题必须针对用户的具体目标,不要问通用问题
+- risk 必须具体,说明不澄清会导致什么实际后果
+- 如果目标已经足够清晰(关键维度都有信息),返回 {"done": true}
+- 用中文回答`;
+
+export async function nextClarificationQuestion(state: ProjectState, client: LlmClient): Promise<NextQuestion | null> {
+  const userPrompt = buildUserPrompt(state);
+  const result = await client.completeJson<{ question?: string; risk?: string; done?: boolean }>("composer", SYSTEM_PROMPT, userPrompt);
+  if (result.done) return null;
+  if (!result.question || !result.risk) return null;
+  return { question: result.question, risk: result.risk };
+}
+
+export function appendClarification(state: ProjectState, answer: string, next: NextQuestion | null): ProjectState {
+  const previous = state.status.clarifier?.clarifications ?? [];
+  const lastQuestion = previous.length > 0 ? previous[previous.length - 1]?.q : state.project.goal;
 
   state.status.clarifier = {
     status: "clarifying",
-    clarifications: [...(state.status.clarifier?.clarifications ?? []), { q: next.question, a: answer, risk: next.risk }],
+    clarifications: [...previous, { q: lastQuestion, a: answer, risk: next?.risk ?? "已回答" }],
   };
   return state;
 }
@@ -53,4 +51,22 @@ export function buildGoalSummary(state: ProjectState): string {
     lines.push(`  Risk if unclear: ${entry.risk}`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+function buildUserPrompt(state: ProjectState): string {
+  const clarifications = state.status.clarifier?.clarifications ?? [];
+  const lines = [`目标: ${state.project.goal}`, ""];
+  if (clarifications.length > 0) {
+    lines.push("已澄清:");
+    for (const entry of clarifications) {
+      lines.push(`  Q: ${entry.q}`);
+      lines.push(`  A: ${entry.a}`);
+    }
+  } else {
+    lines.push("尚未澄清任何问题。");
+  }
+  lines.push("");
+  lines.push(`已澄清轮数: ${clarifications.length}(软上限 7)`);
+  lines.push("请判断下一步:如果目标已足够清晰返回 done=true,否则提出一个最关键的待澄清问题。");
+  return lines.join("\n");
 }

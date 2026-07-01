@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { parse } from "yaml";
 
 import { appendClarification, buildGoalSummary, nextClarificationQuestion } from "./clarifier.js";
-import { runCli } from "./cli.js";
 import { EventBus, projectEvent } from "./events.js";
+import { HttpLlmClient, loadConfig, type LlmClient } from "./llm.js";
 import { approveGate, getProject, listProjects, projectPath, rejectGate, saveProjectState } from "./project-store.js";
 import { composeSolutionWorkflow, runProject } from "./pipeline.js";
 import { renderHomePage } from "./web.js";
@@ -14,11 +14,13 @@ import { renderHomePage } from "./web.js";
 export interface ServerOptions {
   rootDir: string;
   bus?: EventBus;
+  client?: LlmClient;
 }
 
-export function buildServer(options: ServerOptions): FastifyInstance {
+export async function buildServer(options: ServerOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   const bus = options.bus ?? new EventBus();
+  const client = options.client ?? new HttpLlmClient(await loadConfig(options.rootDir));
 
   app.get("/", async (_request, reply) => {
     reply.type("text/html");
@@ -31,19 +33,21 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
   app.get<{ Params: { id: string } }>("/projects/:id/clarify", async (request) => {
     const state = await getProject(options.rootDir, request.params.id);
-    const question = nextClarificationQuestion(state);
+    const question = await nextClarificationQuestion(state, client);
     return question ?? { summary: buildGoalSummary(state) };
   });
 
   app.post<{ Params: { id: string }; Body: { answer: string } }>("/projects/:id/input", async (request) => {
-    const state = appendClarification(await getProject(options.rootDir, request.params.id), request.body.answer);
-    await saveProjectState(options.rootDir, state);
+    const state = await getProject(options.rootDir, request.params.id);
+    const next = await nextClarificationQuestion(state, client);
+    const updated = appendClarification(state, request.body.answer, next);
+    await saveProjectState(options.rootDir, updated);
     bus.publish(projectEvent("input_recorded", request.params.id));
-    return state;
+    return updated;
   });
 
   app.post<{ Params: { id: string } }>("/projects/:id/plan", async (request) => {
-    const workflow = await composeSolutionWorkflow(options.rootDir, request.params.id);
+    const workflow = await composeSolutionWorkflow(options.rootDir, request.params.id, client);
     bus.publish(projectEvent("plan_composed", request.params.id));
     return workflow;
   });
@@ -61,7 +65,7 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   });
 
   app.post<{ Params: { id: string } }>("/projects/:id/run", async (request) => {
-    await runProject(options.rootDir, request.params.id);
+    await runProject(options.rootDir, request.params.id, client);
     bus.publish(projectEvent("run_completed", request.params.id));
     return getProject(options.rootDir, request.params.id);
   });
@@ -77,12 +81,10 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   });
 
   app.post<{ Body: { goal: string } }>("/projects", async (request) => {
-    const lines: string[] = [];
-    await runCli(["new", request.body.goal, "--root", options.rootDir], (line) => lines.push(line));
-    const id = lines.find((line) => line.startsWith("created "))?.split(" ")[1];
-    if (!id) throw new Error("Project creation did not return an id");
-    bus.publish(projectEvent("project_created", id));
-    return getProject(options.rootDir, id);
+    const { createProject } = await import("./project-store.js");
+    const project = await createProject(options.rootDir, request.body.goal);
+    bus.publish(projectEvent("project_created", project.id));
+    return getProject(options.rootDir, project.id);
   });
 
   app.get<{ Params: { id: string }; Querystring: { once?: string } }>("/projects/:id/events", async (request, reply) => {
