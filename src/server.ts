@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import type { FastifyInstance } from "fastify";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parse } from "yaml";
 
@@ -118,6 +118,15 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     return parse(raw);
   });
 
+  app.get<{ Params: { id: string } }>("/projects/:id/deliverables", async (request) => {
+    const solDir = join(projectPath(options.rootDir, request.params.id), "solution");
+    const result: Array<{ path: string; content: string }> = [];
+    try {
+      await collectMarkdownFiles(solDir, solDir, result);
+    } catch { /* solution dir not found */ }
+    return result;
+  });
+
   app.post<{ Body: { goal: string } }>("/projects", async (request) => {
     const { createProject } = await import("./project-store.js");
     const project = await createProject(options.rootDir, request.body.goal);
@@ -143,4 +152,18 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   });
 
   return app;
+}
+
+async function collectMarkdownFiles(baseDir: string, currentDir: string, result: Array<{ path: string; content: string }>): Promise<void> {
+  const entries = await readdir(currentDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      await collectMarkdownFiles(baseDir, fullPath, result);
+    } else if (entry.name.endsWith(".md")) {
+      const relPath = fullPath.slice(baseDir.length + 1);
+      const content = await readFile(fullPath, "utf8");
+      result.push({ path: relPath, content });
+    }
+  }
 }

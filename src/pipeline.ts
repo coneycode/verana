@@ -181,7 +181,7 @@ export async function runProject(rootDir: string, projectId: string, client: Llm
     await saveProjectState(rootDir, state);
     bus?.publish(projectEvent("task_updated", projectId, { taskId: task.id, status: "running", runId }));
 
-    await executeLlmTask(rootDir, projectId, runId, taskSpec, spec, client, bus);
+    await executeLlmTask(rootDir, projectId, runId, taskSpec, spec, client, bus, task.feedback);
     task.status = "verifying";
     await saveProjectState(rootDir, state);
     bus?.publish(projectEvent("task_updated", projectId, { taskId: task.id, status: "verifying", runId }));
@@ -222,7 +222,7 @@ const EXECUTOR_SYSTEM = `你是一个方案调研执行者。根据 task 描述,
 - 如果是分析 task,给出对比表、推荐方案和理由、实施任务拆解
 - 如果是审查 task,列出假设、遗漏、风险`;
 
-async function executeLlmTask(rootDir: string, projectId: string, runId: string, task: TaskSpec, spec: WorkflowSpec, client: LlmClient, bus?: EventBus): Promise<void> {
+async function executeLlmTask(rootDir: string, projectId: string, runId: string, task: TaskSpec, spec: WorkflowSpec, client: LlmClient, bus?: EventBus, feedback?: string[]): Promise<void> {
   const dir = projectPath(rootDir, projectId);
   const runDir = join(dir, "runs", runId);
   await mkdir(runDir, { recursive: true });
@@ -240,16 +240,19 @@ async function executeLlmTask(rootDir: string, projectId: string, runId: string,
     }
   }
 
-  const userPrompt = [
+  const userPromptLines = [
     `项目目标: ${spec.goal.clarified}`,
     "",
     `Task: ${task.id}`,
     `描述: ${task.desc}`,
     "",
     inputContents.length > 0 ? `上游输入:${inputContents.join("\n")}` : "无上游输入。",
-    "",
-    "请产出本 task 的交付物内容。",
-  ].join("\n");
+  ];
+  if (feedback && feedback.length > 0) {
+    userPromptLines.push("", "【打回反馈】以下是审核者提出的具体要求,请据此调整:", ...feedback.map((f, i) => `${i + 1}. ${f}`));
+  }
+  userPromptLines.push("", "请产出本 task 的交付物内容。");
+  const userPrompt = userPromptLines.join("\n");
 
   bus?.publish(projectEvent("llm_stream", projectId, { runId, taskId: task.id, phase: "executing", message: "正在调用 LLM 生成交付物..." }));
 

@@ -204,8 +204,9 @@ function renderGuide() {
   }
 
   if (phase === 'plan_review') {
-    el.innerHTML = '<div class="guide"><div class="guide-title">第 4 步:审核任务拆解</div><div class="guide-desc">系统已生成方案 workflow,包含任务 DAG。请审核下方的 Tasks,确认拆解合理后通过。</div><div class="row"><button class="good" id="approvePlanBtn">通过,开始执行</button><button class="bad" id="rejectPlanBtn">打回重做</button></div></div>';
+    el.innerHTML = '<div class="guide"><div class="guide-title">第 4 步:审核任务拆解</div><div class="guide-desc">系统已生成方案 workflow,包含任务 DAG。请审核下方的 Tasks,确认拆解合理后通过。</div><div class="row"><button class="good" id="approvePlanBtn">通过,开始执行</button><button class="bad" id="showRejectPlanBtn">打回重做</button></div><div id="rejectPlanPanel" style="display:none;margin-top:8px"><textarea id="rejectPlanNote" placeholder="具体打回要求:哪些 task 拆得不对、缺什么、要怎么调整" style="width:100%;min-height:60px"></textarea><button class="bad" id="rejectPlanBtn" style="margin-top:6px">确认打回</button></div></div>';
     $('approvePlanBtn').onclick = () => doApprove('plan_review');
+    $('showRejectPlanBtn').onclick = () => { $('rejectPlanPanel').style.display='block'; $('rejectPlanNote').focus(); };
     $('rejectPlanBtn').onclick = () => doReject('plan_review');
     return;
   }
@@ -218,9 +219,11 @@ function renderGuide() {
   }
 
   if (phase === 'final_review') {
-    el.innerHTML = '<div class="guide"><div class="guide-title">第 6 步:审核最终方案</div><div class="guide-desc">所有 task 已完成并通过验证。请审核方案交付物,确认闭环。</div><div class="row"><button class="good" id="approveFinalBtn">通过,方案闭环</button><button class="bad" id="rejectFinalBtn">打回重做</button></div></div>';
+    el.innerHTML = '<div class="guide"><div class="guide-title">第 6 步:审核最终方案</div><div class="guide-desc">所有 task 已完成并通过验证。下方是交付物,请审核后确认闭环。</div><div id="deliverablesBox">正在加载交付物...</div><div class="row" style="margin-top:10px"><button class="good" id="approveFinalBtn">通过,方案闭环</button><button class="bad" id="showRejectFinalBtn">打回重做</button></div><div id="rejectFinalPanel" style="display:none;margin-top:8px"><textarea id="rejectFinalNote" placeholder="具体打回要求:哪里不对、要怎么改、期望什么结果" style="width:100%;min-height:60px"></textarea><button class="bad" id="rejectFinalBtn" style="margin-top:6px">确认打回</button></div></div>';
     $('approveFinalBtn').onclick = () => doApprove('final_review');
+    $('showRejectFinalBtn').onclick = () => { $('rejectFinalPanel').style.display='block'; $('rejectFinalNote').focus(); };
     $('rejectFinalBtn').onclick = () => doReject('final_review');
+    loadDeliverables();
     return;
   }
 
@@ -299,6 +302,18 @@ async function loadActiveStream() {
   $('logsBox').textContent = stream || '暂无输出，正在等待 LLM 响应...';
 }
 
+async function loadDeliverables() {
+  const el = $('deliverablesBox');
+  if (!el) return;
+  try {
+    const files = await api('/projects/'+selectedId+'/deliverables');
+    if (!files.length) { el.innerHTML = '<div class="muted">暂无交付物。</div>'; return; }
+    el.innerHTML = files.map(f => '<div style="margin-bottom:12px"><div class="qa-q">'+escapeHtml(f.path)+'</div><pre style="max-height:300px;font-size:13px">'+escapeHtml(f.content)+'</pre></div>').join('');
+  } catch(e) {
+    el.innerHTML = '<div class="muted">加载交付物失败: '+escapeHtml(e.message)+'</div>';
+  }
+}
+
 async function maybeAutoStartClarify() {
   const phase = getPhase();
   if (phase === 'created' && !state.status.clarifier?.current_question) { await doClarify(); }
@@ -345,8 +360,9 @@ async function doApprove(gate) {
 }
 
 async function doReject(gate) {
-  const note = prompt('打回原因/反馈:');
-  if (!note) return;
+  const noteEl = gate === 'plan_review' ? $('rejectPlanNote') : $('rejectFinalNote');
+  const note = noteEl?.value.trim();
+  if (!note) { alert('请填写具体打回要求'); return; }
   setBusy(true);
   try { await post('/projects/'+selectedId+'/reject', { gate, note }); await refresh(); }
   catch(e) { alert(e.message); }
