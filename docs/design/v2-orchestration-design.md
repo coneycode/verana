@@ -1,8 +1,8 @@
 # Verana v2 — 项目制 Agent Workflow 交付脚手架 设计文档
 
-状态: 设计完成,待实现
-版本: v0.2(梳理重排 — 稳定章节顺序、补三层状态、统一示例)
-最后更新: 2026-06-30
+状态: v1 方案交付闭环已实现并端到端验证通过(真实 LLM)
+版本: v0.3(实现阶段同步 — LLM 切 Anthropic 原生 API、引导式 Web UI、端到端验证)
+最后更新: 2026-07-01
 本文记录已锁定的设计决策。每节标注:
 [LOCKED] 已确认 · [DEFERRED] 推迟 · [PARTIAL] 第一版部分实现 · [OUTLINE] 仅预留接口
 
@@ -611,6 +611,10 @@ FAIL 分两种性质:
 - 展示 workflow task 状态、claim/verdict 日志入口
 - 连接 SSE,收到项目事件后刷新
 
+**实现状态(v0.3):** Web UI 已做成引导式步骤界面 —— 顶部步骤条(创建→澄清→合成→审Plan→执行→审方案→完成),
+按当前 workflow 阶段动态渲染操作面板(按钮、输入框、风险提示),下方 Clarifier 问答记录 + Tasks 表 + Claim/Verdict 详情。
+后端 API 已覆盖完整闭环(create/clarify/input/plan/approve/reject/run/runs/events)。
+
 原则:Web UI 只调用后端 API,不复制业务逻辑;后续可替换成正式前端。
 
 ### 长任务推送
@@ -733,6 +737,9 @@ LLM 对本产品只是 HTTP 调用,不需要 Python 生态。
 ### LLM 调用层:薄 client 抽象
 
 - 配 base_url + model + key;composer model 与 evaluator model 各配各的,支持不同源(第 8 节要求)
+- **实现:HttpLlmClient 用 Anthropic 原生 Messages API**(/v1/messages,x-api-key,anthropic-version);
+  配置文件 verana.config.yaml(gitignored)填 base_url/model/api_key,两个角色必须不同模型
+- 接口抽象为 LlmClient(complete / completeJson),换协议(如 OpenAI 兼容)只需换实现类
 
 ### 代码策略:从零写,不复用旧 spike 代码
 
@@ -806,3 +813,30 @@ workflow schema、DAG、三层状态机、gates、claim/verdict、长任务恢�
 Clarifier(澄清)→ Composer(动态合成 + 三层自检)→ Executor/Hermes(执行)
 → Verifier(独立判定)→ 三道门人审,CLI + 文件状态 + SSE 后端。
 推迟/预留:12 权限安全、13 自动沉淀、15 实现阶段。
+
+---
+
+## 附录 B:实现状态(v0.3, 2026-07-01)
+
+已实现并端到端验证通过(真实 LLM,非 mock):
+
+| 模块 | 文件 | 状态 |
+|------|------|------|
+| 项目存储(文件状态) | project-store.ts | done — create/list/get/save + gate 审批 |
+| Clarifier 澄清 | clarifier.ts | done — LLM 多轮提问 + 风险告知 + 软上限 |
+| Composer 合成 | pipeline.ts | done — LLM 生成 workflow DAG + 硬校验 + 资源写入 |
+| Verifier 验证 | pipeline.ts | done — 独立 evaluator 模型 + claim/verdict |
+| Executor 适配 | executors.ts | stub — HermesAdapter.probe() 占位,实际执行由 pipeline 内 LLM 直跑 |
+| LLM Client | llm.ts | done — Anthropic 原生 Messages API,config 文件驱动 |
+| CLI | cli.ts | done — new/list/status/clarify/input/plan/approve/reject/run/logs/cancel |
+| Fastify + SSE | server.ts | done — 全闭环 REST API + SSE 事件流 |
+| Web UI | web.ts | done — 引导式步骤界面,覆盖完整闭环 |
+| Workflow 校验 | workflow-validator.ts | done — DAG 无环 + checks 存在 + 依赖闭合 + gate bounce |
+| 测试 | tests/ | 19 tests pass — 覆盖 store/clarifier/composer/verifier/server/validator |
+
+已知 gap(设计已定但实现未跟上):
+- Executor 适配层:设计第 3 节的 prepare/execute/collect 接口未实现,pipeline 内直接调 LLM 代替 executor
+- Composer 三层自检:只做了第一层(代码硬校验),第二层(独立模型评分)和第三层(人审报告)未实现
+- Verifier 自动重跑:FAIL 即停,未实现带反馈重跑(上限 2 次)
+- goal_confirm 门:未实现(澄清后直接可 plan,无目标确认摘要门)
+- 实现阶段:完全未实现(第 15 节,仅预留)

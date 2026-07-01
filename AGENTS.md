@@ -4,9 +4,9 @@
 
 ## 项目性质
 
-Verana 是一个**项目制 Agent Workflow 交付脚手架**(v2 重写中)。
-当前处于**设计阶段**,核心产出是 `docs/design/` 下的设计文档。
-代码将根据设计文档从零编写。
+Verana 是一个**项目制 Agent Workflow 交付脚手架**(v2)。
+v1 方案交付闭环已实现并端到端验证通过(真实 LLM)。代码在 src/,设计文档在 docs/design/。
+当前迭代:补齐设计已定但未实现的 gap(Executor 适配层、Composer 三层自检、Verifier 自动重跑等)。
 
 ## 核心工作流:设计文档驱动
 

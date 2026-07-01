@@ -2,57 +2,70 @@
 
 Verana v2 is a project-based Agent Workflow delivery scaffold.
 
-Current MVP scope: solution-delivery loop only.
+Current scope: solution-delivery loop (clarify → compose → execute → verify → gate).
 
-Flow:
+Status: v1 implemented and end-to-end verified with real LLM.
 
-1. `new` creates a project directory and file-backed state.
-2. `clarify` / `input` records goal clarification with risk disclosure.
-3. `plan` composes a solution workflow, project agents, skills, and self-check report.
-4. `approve <gate>` opens the execution gate.
-5. `run` executes the local MVP solution DAG and writes claim/verdict logs.
-6. `approve final_review` closes the solution workflow.
-
-## Commands
+## Quick Start
 
 ```sh
 npm install
-npm test
+npm test          # 19 tests
 npm run typecheck
-npm run build
 
-cp verana.config.example.yaml verana.config.yaml  # then fill in your models + keys
+cp verana.config.example.yaml verana.config.yaml  # fill in your models + keys
 
+# CLI
 npm run cli -- new "调研海外红人监控系统"
 npm run cli -- list
-npm run cli -- status <project-id>
 npm run cli -- clarify <project-id>
-npm run cli -- input <project-id> "交付调研方案"
+npm run cli -- input <project-id> "自研系统，覆盖数据源和合规"
 npm run cli -- plan <project-id>
-npm run cli -- approve <project-id> plan_review --note "任务拆解通过"
+npm run cli -- approve <project-id> plan_review --note "通过"
 npm run cli -- run <project-id>
 npm run cli -- logs <project-id> run-0001
 npm run cli -- approve <project-id> final_review --note "方案闭环"
+
+# Server (Fastify + SSE + Web UI)
+VERANA_ROOT=~/verana-data npm run server
+# -> open http://127.0.0.1:3317
 ```
 
-## Server
+## Configuration
 
-```sh
-npm run server
+verana.config.yaml (gitignored). Two model roles, must be different models:
+
+```yaml
+composer:
+  base_url: "http://your-gateway/anthropic"
+  model: "ppio/pa/claude-opus-4-8"
+  api_key: "sk-xxx"
+
+evaluator:
+  base_url: "http://your-gateway/anthropic"
+  model: "pa/claude-sonnet-5"
+  api_key: "sk-xxx"
 ```
 
-First copy `verana.config.example.yaml` to `verana.config.yaml` and fill in your
-composer/evaluator models (OpenAI-compatible API). Then:
+LLM client uses Anthropic native Messages API (/v1/messages, x-api-key, anthropic-version).
+To switch to OpenAI-compatible API, replace HttpLlmClient in llm.ts.
 
-REST/SSE skeleton:
+## REST API
 
-- `POST /projects`
-- `GET /projects`
-- `GET /projects/:id`
-- `GET /projects/:id/events`
+- POST /projects — create project
+- GET /projects — list all
+- GET /projects/:id — get state
+- POST /projects/:id/clarify — get next clarification question
+- POST /projects/:id/input — answer clarification
+- POST /projects/:id/plan — compose workflow
+- POST /projects/:id/approve — approve a gate
+- POST /projects/:id/reject — reject a gate (bounce)
+- POST /projects/:id/run — execute DAG
+- GET /projects/:id/runs/:run — get claim + verdict
+- GET /projects/:id/events — SSE event stream
 
 ## Design Source Of Truth
 
-See `docs/design/v2-orchestration-design.md`.
+docs/design/v2-orchestration-design.md — see Appendix B for implementation status.
 
-Per `AGENTS.md`: before changing code, inspect the design-doc git diff/log first.
+Per AGENTS.md: before changing code, inspect the design-doc git diff/log first.
