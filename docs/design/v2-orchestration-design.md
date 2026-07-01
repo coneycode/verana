@@ -599,6 +599,20 @@ FAIL 分两种性质:
 - 后端从一开始做成 **API + 事件流(SSE)** 架构,逻辑不写死在 CLI 里
 - 继承 spike 的 **Fastify + SSE** 架构思路(从零写,见第 15 节),Web UI 以后无缝接入
 
+### Web 试用页面(第一版可视化入口)
+
+为便于试用效果,第一版增加一个轻量 Web UI,由 Fastify 直接提供静态页面,不引入 React/Vite。
+目标不是完整产品界面,而是把现有 CLI/API 闭环可视化:
+
+- 新建项目(goal 输入)
+- 项目列表 + 当前状态
+- 澄清问题/风险提示 + 输入回答
+- 生成 plan、审批 plan_review、执行 run、审批 final_review
+- 展示 workflow task 状态、claim/verdict 日志入口
+- 连接 SSE,收到项目事件后刷新
+
+原则:Web UI 只调用后端 API,不复制业务逻辑;后续可替换成正式前端。
+
 ### 长任务推送
 
 - 第一版:CLI 主动查(`verana status`)+ 本地事件流
