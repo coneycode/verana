@@ -287,10 +287,10 @@ function renderTasks() {
 async function loadLog(runId) {
   const log = await api('/projects/'+selectedId+'/runs/'+runId);
   const parts = [];
-  if (log.stream) parts.push('=== 实时输出 ===\n' + log.stream);
-  if (log.claim) parts.push('=== Claim ===\n' + log.claim);
-  if (log.verdict) parts.push('=== Verdict ===\n' + JSON.stringify(log.verdict, null, 2));
-  $('logsBox').textContent = parts.join('\n\n') || '暂无日志。';
+  if (log.stream) parts.push('=== 实时输出 ===' + String.fromCharCode(10) + log.stream);
+  if (log.claim) parts.push('=== Claim ===' + String.fromCharCode(10) + log.claim);
+  if (log.verdict) parts.push('=== Verdict ===' + String.fromCharCode(10) + JSON.stringify(log.verdict, null, 2));
+  $('logsBox').textContent = parts.join(String.fromCharCode(10) + String.fromCharCode(10)) || '暂无日志。';
 }
 
 async function loadActiveStream() {
