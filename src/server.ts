@@ -19,8 +19,13 @@ export interface ServerOptions {
 
 export async function buildServer(options: ServerOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
+    try { done(null, body ? JSON.parse(body as string) : {}); }
+    catch (err) { done(err as Error, undefined); }
+  });
   const bus = options.bus ?? new EventBus();
-  const client = options.client ?? new HttpLlmClient(await loadConfig(options.rootDir));
+  const client = options.client ?? new HttpLlmClient(await loadConfig());
 
   app.get("/", async (_request, reply) => {
     reply.type("text/html");
@@ -34,6 +39,17 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   app.get<{ Params: { id: string } }>("/projects/:id/clarify", async (request) => {
     const state = await getProject(options.rootDir, request.params.id);
     const question = await nextClarificationQuestion(state, client);
+    return question ?? { summary: buildGoalSummary(state) };
+  });
+
+  app.post<{ Params: { id: string } }>("/projects/:id/clarify", async (request) => {
+    const state = await getProject(options.rootDir, request.params.id);
+    const question = await nextClarificationQuestion(state, client);
+    if (question && !state.status.clarifier) {
+      state.status.clarifier = { status: "clarifying", clarifications: [] };
+      await saveProjectState(options.rootDir, state);
+    }
+    bus.publish(projectEvent("clarify_started", request.params.id));
     return question ?? { summary: buildGoalSummary(state) };
   });
 

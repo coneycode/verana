@@ -275,7 +275,7 @@ async function verifyLlmTask(rootDir: string, projectId: string, runId: string, 
     const targetPath = output.path.endsWith("/") ? join(output.path, "content.md") : output.path;
     try {
       const content = await readFile(join(dir, targetPath), "utf8");
-      outputContents.push(`\n--- ${output.path} ---\n${content.slice(0, 2000)}`);
+      outputContents.push(`\n--- ${output.path} ---\n${content}`);
     } catch {
       outputContents.push(`\n--- ${output.path} ---\n(文件不存在)`);
     }

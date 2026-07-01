@@ -57,21 +57,20 @@ export class HttpLlmClient implements LlmClient {
 
   async complete(role: ModelRole, system: string, user: string): Promise<string> {
     const cfg = this.config[role];
-    const url = `${cfg.base_url.replace(/\/$/, "")}/chat/completions`;
+    const url = `${cfg.base_url.replace(/\/$/, "")}/v1/messages`;
     const body = {
       model: cfg.model,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      temperature: 0.3,
+      max_tokens: 8192,
+      system,
+      messages: [{ role: "user", content: user }],
     };
 
     const res = await fetch(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${cfg.api_key}`,
+        "x-api-key": cfg.api_key,
+        "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
     });
@@ -81,8 +80,9 @@ export class HttpLlmClient implements LlmClient {
       throw new Error(`LLM ${role} call failed (${res.status}): ${text.slice(0, 500)}`);
     }
 
-    const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
-    const content = data.choices?.[0]?.message?.content;
+    const data = (await res.json()) as { content: Array<{ type: string; text?: string }> };
+    const textBlock = data.content?.find((block) => block.type === "text");
+    const content = textBlock?.text;
     if (!content) throw new Error(`LLM ${role} returned empty content`);
     return content;
   }
