@@ -141,6 +141,8 @@ async function refresh() {
 }
 
 function getPhase() {
+  const clarifier = state.status.clarifier;
+  if (clarifier && !state.status.workflows.solution) return "clarifying";
   const wf = state.status.workflows.solution;
   if (!wf) return state.project.status;
   return wf.status;
@@ -279,7 +281,14 @@ async function maybeAutoStartClarify() {
 
 async function doClarify() {
   setBusy(true);
-  try { await post('/projects/'+selectedId+'/clarify'); await refresh(); }
+  try {
+    const r = await post('/projects/'+selectedId+'/clarify');
+    await refresh();
+    if (r.question) {
+      const qEl = $('clarifyQuestion'); if (qEl) qEl.textContent = 'Q: ' + r.question;
+      const rEl = $('clarifyRisk'); if (rEl && r.risk) { rEl.textContent = '⚠ ' + r.risk; rEl.style.display = 'block'; }
+    }
+  }
   catch(e) { alert(e.message); }
   setBusy(false);
 }
