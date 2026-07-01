@@ -262,7 +262,7 @@ async function loadLog(runId) {
 
 async function maybeAutoStartClarify() {
   const phase = getPhase();
-  if (phase === 'created') { await doClarify(); }
+  if (phase === 'created' && !state.status.clarifier?.current_question) { await doClarify(); }
 }
 
 async function doClarify() {

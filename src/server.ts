@@ -38,12 +38,19 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
 
   app.get<{ Params: { id: string } }>("/projects/:id/clarify", async (request) => {
     const state = await getProject(options.rootDir, request.params.id);
+    if (state.status.clarifier?.current_question) {
+      return state.status.clarifier.current_question;
+    }
     const question = await nextClarificationQuestion(state, client);
     return question ?? { summary: buildGoalSummary(state) };
   });
 
   app.post<{ Params: { id: string } }>("/projects/:id/clarify", async (request) => {
     const state = await getProject(options.rootDir, request.params.id);
+    // If we already have a current question, don't call LLM again (avoid 429 + question changing)
+    if (state.status.clarifier?.current_question) {
+      return state.status.clarifier.current_question;
+    }
     const question = await nextClarificationQuestion(state, client);
     if (question && !state.status.clarifier) {
       state.status.clarifier = { status: "clarifying", clarifications: [], current_question: question };
