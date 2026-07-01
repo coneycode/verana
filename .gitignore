@@ -22,3 +22,7 @@ build/
 
 # project runtime data (generated at runtime, not source)
 projects/
+
+# local UI trial temp data
+.tmp-ui
+.tmp-ui-root

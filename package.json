@@ -1,0 +1,25 @@
+{
+  "name": "verana",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "verana": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "cli": "tsx src/cli.ts",
+    "server": "tsx src/server-main.ts",
+    "test": "node --import tsx --test tests/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fastify": "^5.2.1",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
