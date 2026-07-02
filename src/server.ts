@@ -99,6 +99,13 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     return getProject(options.rootDir, request.params.id);
   });
 
+  app.post<{ Params: { id: string; taskId: string } }>("/projects/:id/rerun/:taskId", async (request) => {
+    const { rerunTask } = await import("./pipeline.js");
+    await rerunTask(options.rootDir, request.params.id, request.params.taskId, client, bus);
+    bus.publish(projectEvent("run_completed", request.params.id));
+    return getProject(options.rootDir, request.params.id);
+  });
+
   app.get<{ Params: { id: string; run: string } }>("/projects/:id/runs/:run", async (request) => {
     const runDir = join(projectPath(options.rootDir, request.params.id), "runs", request.params.run);
     const claim = await readFile(join(runDir, "claim.md"), "utf8").catch(() => "");

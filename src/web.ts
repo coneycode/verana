@@ -263,6 +263,8 @@ function renderTasks() {
 
   // If we have workflow spec, show full task cards with desc/outputs/checks
   if (workflowSpec && workflowSpec.tasks) {
+    const phase = getPhase();
+    const canRerun = ['executing','final_review','blocked','failed','approved'].includes(phase);
     $('tasks').innerHTML = workflowSpec.tasks.map(task => {
       const rt = tasks[task.id];
       const status = rt?.status || 'pending';
@@ -271,13 +273,16 @@ function renderTasks() {
       const deps = (task.depends_on||[]).length ? '<span class="muted">依赖: '+escapeHtml((task.depends_on||[]).join(', '))+'</span>' : '';
       const outputs = (task.outputs||[]).map(o => '<div class="muted" style="font-size:12px">产出: '+escapeHtml(o.path)+' — '+escapeHtml(o.desc)+'</div>').join('');
       const checks = (task.checks||[]).map(c => '<div class="muted" style="font-size:12px">验收: ['+escapeHtml(c.method)+'] '+escapeHtml(c.desc)+'</div>').join('');
+      const rerunBtn = canRerun && status !== 'running' ? '<button class="secondary rerun-btn" data-task="'+escapeHtml(task.id)+'" style="padding:2px 10px;font-size:12px;margin-top:4px">重跑</button>' : '';
       return '<div style="padding:10px;border:1px solid #293a57;border-radius:8px;margin-bottom:8px">'+
         '<div class="row" style="justify-content:space-between"><b>'+escapeHtml(task.id)+' — '+escapeHtml(task.agent)+'</b><span class="pill '+cls+'">'+escapeHtml(status)+'</span></div>'+
         '<div style="margin:6px 0">'+escapeHtml(task.desc)+'</div>'+
         outputs+checks+deps+
         (runs ? '<div style="margin-top:4px">'+runs+'</div>' : '')+
+        rerunBtn+
         '</div>';
     }).join('');
+    document.querySelectorAll('.rerun-btn').forEach(el => el.addEventListener('click', () => doRerun(el.dataset.task)));
   } else {
     $('tasks').innerHTML = '<table><tr><th>Task</th><th>Status</th><th>Runs</th></tr>' + vals.map(t => {
       const cls = t.status === 'delivered' ? 'ok' : (t.status === 'failed' ? 'warn' : '');
@@ -372,6 +377,13 @@ async function doReject(gate) {
 async function doRun() {
   setBusy(true);
   try { await post('/projects/'+selectedId+'/run'); await refresh(); }
+  catch(e) { alert(e.message); }
+  setBusy(false);
+}
+
+async function doRerun(taskId) {
+  setBusy(true);
+  try { await post('/projects/'+selectedId+'/rerun/'+taskId); await refresh(); }
   catch(e) { alert(e.message); }
   setBusy(false);
 }

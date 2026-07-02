@@ -211,6 +211,52 @@ export async function runProject(rootDir: string, projectId: string, client: Llm
   }
 }
 
+export async function rerunTask(rootDir: string, projectId: string, taskId: string, client: LlmClient, bus?: EventBus): Promise<void> {
+  const state = await getProject(rootDir, projectId);
+  const workflow = state.status.workflows.solution;
+  if (!workflow) throw new Error("Solution workflow does not exist");
+
+  // Find the task and all downstream dependents
+  const spec = await readWorkflowSpec(rootDir, projectId);
+  const downstream = collectDownstream(spec, taskId);
+
+  // Reset: the target task + all downstream → pending
+  for (const id of downstream) {
+    const task = workflow.tasks[id];
+    if (task) {
+      task.status = "pending";
+      task.runs = [];
+      task.feedback = [];
+    }
+  }
+
+  // If workflow was in final_review/blocked/failed, move back to executing
+  if (workflow.status !== "executing") {
+    workflow.status = "executing";
+  }
+  state.status.active_task = taskId;
+  await saveProjectState(rootDir, state);
+  bus?.publish(projectEvent("task_updated", projectId, { taskId, status: "pending", rerun: true }));
+
+  // Now run the DAG from the target task
+  await runProject(rootDir, projectId, client, bus);
+}
+
+function collectDownstream(spec: WorkflowSpec, startTaskId: string): string[] {
+  const result = new Set<string>([startTaskId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const task of spec.tasks) {
+      if (!result.has(task.id) && (task.depends_on ?? []).some((dep) => result.has(dep))) {
+        result.add(task.id);
+        changed = true;
+      }
+    }
+  }
+  return [...result];
+}
+
 async function readWorkflowSpec(rootDir: string, projectId: string): Promise<WorkflowSpec> {
   return parse(await readFile(join(projectPath(rootDir, projectId), "solution", "workflow.yaml"), "utf8")) as WorkflowSpec;
 }
