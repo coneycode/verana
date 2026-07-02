@@ -4,8 +4,8 @@ import { parse, stringify } from "yaml";
 
 import type { GateRecord, ProjectRecord, ProjectState, StatusRecord, WorkflowPhase, WorkflowRecord } from "./types.js";
 
-export async function createProject(rootDir: string, rawGoal: string): Promise<ProjectRecord> {
-  const id = buildProjectId(rawGoal);
+export async function createProject(rootDir: string, rawGoal: string, title?: string): Promise<ProjectRecord> {
+  const id = buildProjectId(rawGoal, title);
   const projectDir = projectPath(rootDir, id);
   const createdAt = new Date().toISOString();
 
@@ -186,41 +186,18 @@ function downstreamTasks(workflow: WorkflowRecord, startTaskId: string): string[
   return [...result];
 }
 
-function buildProjectId(rawGoal: string): string {
+function buildProjectId(rawGoal: string, title?: string): string {
   const date = new Date().toISOString().slice(0, 10);
+  if (title) {
+    // Sanitize title: keep Chinese, alphanum, remove punctuation/whitespace
+    const clean = title.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 10);
+    return `${date}-${clean || slugify(rawGoal)}`;
+  }
   return `${date}-${slugify(rawGoal)}`;
 }
 
 function slugify(input: string): string {
-  const normalized = input
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-
-  const pinyin = transliterateKnownChinese(normalized);
-  const slug = pinyin
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/-{2,}/g, "-");
-
-  return slug || "project";
-}
-
-function transliterateKnownChinese(input: string): string {
-  const map: Record<string, string> = {
-    调: "diao",
-    研: "yan",
-    海: "hai",
-    外: "wai",
-    红: "hong",
-    人: "ren",
-    监: "jian",
-    控: "kong",
-    系: "xi",
-    统: "tong",
-  };
-
-  return Array.from(input)
-    .map((char) => map[char] ?? char)
-    .join("-");
+  // Fallback: first few chars of goal, stripped of punctuation
+  const clean = input.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 8);
+  return clean || "project";
 }

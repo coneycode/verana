@@ -144,7 +144,18 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
 
   app.post<{ Body: { goal: string } }>("/projects", async (request) => {
     const { createProject } = await import("./project-store.js");
-    const project = await createProject(options.rootDir, request.body.goal);
+    // Generate a short Chinese title for the project ID
+    let title: string | undefined;
+    try {
+      const raw = await client.complete("composer",
+        "你是一个项目命名助手。根据用户的目标,生成一个2-6字的中文摘要作为项目名。只输出摘要本身,不要任何额外文字或标点。",
+        `目标: ${request.body.goal}`);
+      title = raw.trim().replace(/^["'"']|["'"']$/g, "");
+    } catch (e) {
+      console.log("[create] title generation failed, using fallback:", (e as Error).message);
+    }
+    const project = await createProject(options.rootDir, request.body.goal, title);
+    console.log(`[create] project ${project.id} (goal: ${request.body.goal.slice(0, 40)})`);
     bus.publish(projectEvent("project_created", project.id));
     return getProject(options.rootDir, project.id);
   });
