@@ -262,7 +262,8 @@ function renderMain() {
 
   // --- Approved ---
   if (phase === 'approved') {
-    el.innerHTML = '<div class="guide"><div class="guide-title" style="color:var(--ok)">方案闭环完成</div><div class="guide-desc">方案阶段已结束。后续可进入实现阶段(待开发)。</div></div>';
+    el.innerHTML = '<div class="guide"><div class="guide-title" style="color:var(--ok)">方案闭环完成</div><div class="guide-desc">方案阶段已结束。最终交付物如下:</div></div><div id="deliverablesBox">正在加载交付物...</div>';
+    loadDeliverables();
     return;
   }
 
