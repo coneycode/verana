@@ -30,7 +30,7 @@ test("composeSolutionWorkflow uses LLM to generate a workflow", async () => {
 
   assert.equal(workflow.phase, "solution");
   assert.equal(workflow.selected_executor, "hermes");
-  assert.equal(workflow.tasks.length, 2);
+  assert.equal(workflow.tasks.length, 3);
   assert.equal(workflow.tasks[0]?.id, "t1");
   assert.equal(workflow.tasks[1]?.depends_on?.[0], "t1");
 
@@ -39,7 +39,7 @@ test("composeSolutionWorkflow uses LLM to generate a workflow", async () => {
   assert.equal(loaded.status.workflows.solution?.status, "plan_review");
 
   const workflowYaml = parse(await readFile(join(root, "projects", project.id, "solution", "workflow.yaml"), "utf8"));
-  assert.equal(workflowYaml.tasks.length, 2);
+  assert.equal(workflowYaml.tasks.length, 3);
 });
 
 test("runProject executes LLM-composed DAG and verifies with LLM evaluator", async () => {

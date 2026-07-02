@@ -52,6 +52,15 @@ export function fakeComposerWorkflow() {
         outputs: [{ path: "solution/solution.md", desc: "方案" }],
         checks: [{ method: "llm_rubric" as const, desc: "有推荐" }],
       },
+      {
+        id: "t3",
+        desc: "审查方案",
+        agent: "critic",
+        depends_on: ["t2"],
+        inputs: [{ path: "solution/solution.md", desc: "方案" }],
+        outputs: [{ path: "solution/review.md", desc: "审查报告" }],
+        checks: [{ method: "llm_rubric" as const, desc: "有审查意见" }],
+      },
     ],
   };
 }

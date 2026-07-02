@@ -9,6 +9,7 @@ export function validateWorkflowSpec(workflow: WorkflowSpec): ValidationResult {
   const errors: string[] = [];
   const taskIds = new Set(workflow.tasks.map((task) => task.id));
 
+  // Original checks
   for (const task of workflow.tasks) {
     if (task.checks.length === 0) errors.push(`Task ${task.id} has no checks`);
     for (const dependency of task.depends_on ?? []) {
@@ -22,6 +23,28 @@ export function validateWorkflowSpec(workflow: WorkflowSpec): ValidationResult {
   }
 
   for (const cycle of detectCycles(workflow.tasks)) errors.push(`DAG cycle: ${cycle.join(" -> ")}`);
+
+  // Deliverable path constraints (solution phase only)
+  if (workflow.phase === "solution") {
+    const allOutputs = workflow.tasks.flatMap((task) => task.outputs.map((o) => o.path));
+
+    // solution.md must exist
+    if (!allOutputs.includes("solution/solution.md")) {
+      errors.push("No task outputs solution/solution.md — final deliverable is required");
+    }
+
+    // review.md must exist
+    if (!allOutputs.includes("solution/review.md")) {
+      errors.push("No task outputs solution/review.md — review report is required");
+    }
+
+    // No .md files in solution/ root except solution.md and review.md
+    for (const path of allOutputs) {
+      if (path.startsWith("solution/") && !path.startsWith("solution/research/") && path !== "solution/solution.md" && path !== "solution/review.md") {
+        errors.push(`Output ${path} must be under solution/research/ (only solution.md and review.md go in solution/ root)`);
+      }
+    }
+  }
 
   return { passed: errors.length === 0, errors };
 }

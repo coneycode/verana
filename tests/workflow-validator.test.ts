@@ -33,8 +33,9 @@ test("validateWorkflowSpec rejects missing checks, missing dependencies, invalid
 test("validateWorkflowSpec accepts a well-formed workflow", () => {
   const valid = baseWorkflow({
     tasks: [
-      { id: "t1", desc: "one", agent: "a", outputs: [], checks: [{ method: "manual", desc: "ok" }] },
-      { id: "t2", desc: "two", agent: "a", outputs: [], checks: [{ method: "manual", desc: "ok" }], depends_on: ["t1"] },
+      { id: "t1", desc: "research", agent: "a", outputs: [{ path: "solution/research/findings.md", desc: "findings" }], checks: [{ method: "manual", desc: "ok" }] },
+      { id: "t2", desc: "solution", agent: "a", outputs: [{ path: "solution/solution.md", desc: "solution" }], checks: [{ method: "manual", desc: "ok" }], depends_on: ["t1"] },
+      { id: "t3", desc: "review", agent: "a", outputs: [{ path: "solution/review.md", desc: "review" }], checks: [{ method: "manual", desc: "ok" }], depends_on: ["t2"] },
     ],
     gates: [
       {

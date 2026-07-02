@@ -30,14 +30,21 @@ const COMPOSER_SYSTEM = `你是一个 workflow 架构师。根据用户目标,�
 
 规则:
 - 3-5 个 task,形成 DAG(后续 task 的 depends_on 指向前面的)
-- 第一个 task 用 researcher 做调研,产出 findings.md
-- 倒数第二个用 analyst 做分析推荐,产出 solution.md
-- 最后一个用 critic 做审查,产出 review.md
+- 第一个 task 用 researcher 做调研,产出 solution/research/findings.md
+- 中间 task(如有)用 analyst 做深入分析,产出放在 solution/research/ 下(如 solution/research/analysis.md),不能放在 solution/ 根目录
+- 倒数第二个用 analyst 做分析推荐,产出 **solution/solution.md** —— 这是最终交付物
+- 最后一个用 critic 做审查,产出 **solution/review.md**
 - 每个 task 必须有 checks(至少一条)
 - 中间 task 的 inputs 要引用上游 task 的 outputs path
 - 用中文写 desc
 - agent 只能是 researcher / analyst / critic 之一
-- method 只能是 file_exists / llm_rubric 之一`;
+- method 只能是 file_exists / llm_rubric 之一
+
+路径约定(不可违反):
+- solution/solution.md — 最终方案交付物(用户看这个),由倒数第二个 task 产出
+- solution/review.md — 审查报告,由最后一个 task 产出
+- solution/research/*.md — 所有中间产物(调研记录、分析文档等),只能放在 research/ 子目录下
+- 除 solution.md 和 review.md 外,solution/ 根目录不得有其他 .md 文件`;
 
 export async function composeSolutionWorkflow(rootDir: string, projectId: string, client: LlmClient): Promise<WorkflowSpec> {
   const state = await getProject(rootDir, projectId);
