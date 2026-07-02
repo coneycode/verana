@@ -312,7 +312,8 @@ async function loadActiveStream() {
     }
   }
   if (!activeRunId) { $('logsBox').textContent = '暂无正在执行的 run。'; return; }
-  const stream = await api('/projects/'+selectedId+'/runs/'+activeRunId+'/stream');
+  const res = await fetch('/projects/'+selectedId+'/runs/'+activeRunId+'/stream');
+  const stream = await res.text();
   $('logsBox').textContent = stream || '暂无输出，正在等待 LLM 响应...';
 }
 
