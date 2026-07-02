@@ -1,3 +1,31 @@
+const MD_RENDERER_JS = [
+  "function markdownToHtml(md) {",
+  "  let s = String(md).replace(/[&<>\"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]});",
+  "  var lines = s.split('\\n');",
+  "  var result = []; var inList = false;",
+  "  for (var i=0; i<lines.length; i++) {",
+  "    var line = lines[i];",
+  "    if (/^###### (.+)/.test(line)) { if(inList){result.push('</ul>');inList=false;} result.push('<h6>'+line.replace(/^###### /,'')+'</h6>'); }",
+  "    else if (/^##### (.+)/.test(line)) { if(inList){result.push('</ul>');inList=false;} result.push('<h5>'+line.replace(/^##### /,'')+'</h5>'); }",
+  "    else if (/^#### (.+)/.test(line)) { if(inList){result.push('</ul>');inList=false;} result.push('<h4>'+line.replace(/^#### /,'')+'</h4>'); }",
+  "    else if (/^### (.+)/.test(line)) { if(inList){result.push('</ul>');inList=false;} result.push('<h3>'+line.replace(/^### /,'')+'</h3>'); }",
+  "    else if (/^## (.+)/.test(line)) { if(inList){result.push('</ul>');inList=false;} result.push('<h2>'+line.replace(/^## /,'')+'</h2>'); }",
+  "    else if (/^# (.+)/.test(line)) { if(inList){result.push('</ul>');inList=false;} result.push('<h1>'+line.replace(/^# /,'')+'</h1>'); }",
+  "    else if (/^[\\-*] (.+)/.test(line)) { if(!inList){result.push('<ul>');inList=true;} result.push('<li>'+line.replace(/^[\\-*] /,'')+'</li>'); }",
+  "    else if (line.trim()==='') { if(inList){result.push('</ul>');inList=false;} result.push(''); }",
+  "    else { if(inList){result.push('</ul>');inList=false;} result.push('<p style=\"margin:4px 0\">'+line+'</p>'); }",
+  "  }",
+  "  if(inList) result.push('</ul>');",
+  "  var html = result.join('\\n');",
+  "  html = html.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');",
+  "  html = html.replace(/\\*(.+?)\\*/g, '<em>$1</em>');",
+  "  var bt = String.fromCharCode(96);",
+  "  var codeRe = new RegExp(bt+'([^'+bt+']+)'+bt, 'g');",
+  "  html = html.replace(codeRe, '<code style=\"background:#1e293b;padding:1px 4px;border-radius:3px;font-size:12px\">$1</code>');",
+  "  return html;",
+  "}",
+].join("\n");
+
 export function renderHomePage(): string {
   return `<!doctype html>
 <html lang="zh-CN">
@@ -305,7 +333,7 @@ function renderExecStream(containerId) {
   const latestRun = runs.length ? runs[runs.length - 1] : null;
   if (latestRun && !activeRunId) activeRunId = latestRun;
 
-  el.innerHTML = '<div class="stream-status">Task: '+escapeHtml(title)+' | 状态: '+escapeHtml(statusText)+(latestRun?' | Run: '+escapeHtml(latestRun):'')+'</div><div class="stream-box" id="streamBox">'+escapeHtml(streamContent || (latestRun ? '点击 task 查看输出,或等待 LLM 实时输出...' : '暂无 run 记录。'))+'</div>';
+  el.innerHTML = '<div class="stream-status">Task: '+escapeHtml(title)+' | 状态: '+escapeHtml(statusText)+(latestRun?' | Run: '+escapeHtml(latestRun):'')+'</div><div class="stream-box" id="streamBox">'+(streamContent ? markdownToHtml(streamContent) : escapeHtml(latestRun ? '点击 task 查看输出,或等待 LLM 实时输出...' : '暂无 run 记录。'))+'</div>';
 }
 
 async function loadRunLog(runId) {
@@ -338,7 +366,7 @@ async function loadDeliverables() {
   try {
     const files = await api('/projects/'+selectedId+'/deliverables');
     if (!files.length) { el.innerHTML = '<div class="muted">暂无交付物。</div>'; return; }
-    el.innerHTML = files.map(f => '<div style="margin-bottom:12px"><div class="qa-q">'+escapeHtml(f.path)+'</div><pre style="max-height:400px">'+escapeHtml(f.content)+'</pre></div>').join('');
+    el.innerHTML = files.map(f => '<div style="margin-bottom:12px"><div class="qa-q">'+escapeHtml(f.path)+'</div><div class="md-content" style="background:#050b17;border:1px solid #1f2d46;border-radius:8px;padding:12px;max-height:400px;overflow:auto">'+markdownToHtml(f.content)+'</div></div>').join('');
   } catch(e) { el.innerHTML = '<div class="muted">加载失败: '+escapeHtml(e.message)+'</div>'; }
 }
 
@@ -450,7 +478,7 @@ function connectEvents() {
     // Update stream box if in executing phase
     const box = $('streamBox');
     if (box) {
-      box.textContent = streamContent || '等待 LLM 响应...';
+      box.innerHTML = streamContent ? markdownToHtml(streamContent) : escapeHtml('等待 LLM 响应...');
     }
     // Also refresh task list to show status changes
     const phase = getPhase();
@@ -462,6 +490,8 @@ function connectEvents() {
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+${MD_RENDERER_JS}
 
 $('createBtn').onclick = async () => { const goal = $('goal').value.trim(); if (!goal) return; setBusy(true); try { const created = await post('/projects', { goal }); selectedId = created.project.id; $('goal').value=''; await loadProjects(); await selectProject(selectedId); } catch(e) { alert(e.message); } setBusy(false); };
 loadProjects();
