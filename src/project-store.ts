@@ -47,10 +47,16 @@ export async function listProjects(rootDir: string): Promise<ProjectRecord[]> {
     throw error;
   }
 
-  const projects = await Promise.all(
-    entries.map(async (entry) => parseYaml<ProjectRecord>(join(dir, entry, "project.yaml"))),
+  const results = await Promise.all(
+    entries.map(async (entry) => {
+      try {
+        return await parseYaml<ProjectRecord>(join(dir, entry, "project.yaml"));
+      } catch {
+        return null; // skip broken/incomplete project directories
+      }
+    }),
   );
-  return projects.sort((a, b) => a.created_at.localeCompare(b.created_at));
+  return results.filter((p): p is ProjectRecord => p !== null).sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 
 export async function deleteProject(rootDir: string, projectId: string): Promise<void> {
