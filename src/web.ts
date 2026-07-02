@@ -302,6 +302,14 @@ async function loadLog(runId) {
 }
 
 async function loadActiveStream() {
+  // If we don't have activeRunId from SSE, find the latest run from task runs
+  if (!activeRunId) {
+    const wf = state?.status?.workflows?.solution;
+    if (wf) {
+      const allRuns = Object.values(wf.tasks).flatMap(t => t.runs || []);
+      if (allRuns.length) activeRunId = allRuns[allRuns.length - 1];
+    }
+  }
   if (!activeRunId) { $('logsBox').textContent = '暂无正在执行的 run。'; return; }
   const stream = await api('/projects/'+selectedId+'/runs/'+activeRunId+'/stream');
   $('logsBox').textContent = stream || '暂无输出，正在等待 LLM 响应...';
@@ -376,16 +384,23 @@ async function doReject(gate) {
 
 async function doRun() {
   setBusy(true);
-  try { await post('/projects/'+selectedId+'/run'); await refresh(); }
-  catch(e) { alert(e.message); }
-  setBusy(false);
+  try {
+    await post('/projects/'+selectedId+'/run');
+    // run is async on server — don't wait, just refresh to see task status changes
+    setBusy(false);
+    await refresh();
+  }
+  catch(e) { alert(e.message); setBusy(false); }
 }
 
 async function doRerun(taskId) {
   setBusy(true);
-  try { await post('/projects/'+selectedId+'/rerun/'+taskId); await refresh(); }
-  catch(e) { alert(e.message); }
-  setBusy(false);
+  try {
+    await post('/projects/'+selectedId+'/rerun/'+taskId);
+    setBusy(false);
+    await refresh();
+  }
+  catch(e) { alert(e.message); setBusy(false); }
 }
 
 function setBusy(b) {
@@ -399,7 +414,7 @@ function connectEvents() {
   $('connection').textContent = 'SSE: connecting';
   source.onopen = () => $('connection').textContent = 'SSE: connected';
   source.onerror = () => $('connection').textContent = 'SSE: disconnected';
-  ['snapshot','project_created','plan_composed','gate_approved','gate_rejected','run_completed','input_recorded','task_updated','status_changed'].forEach(type => source.addEventListener(type, () => { appendEvent(type); refresh(); }));
+  ['snapshot','project_created','plan_composed','gate_approved','gate_rejected','run_completed','run_failed','input_recorded','task_updated','status_changed'].forEach(type => source.addEventListener(type, () => { appendEvent(type); refresh(); }));
   source.addEventListener('llm_stream', (event) => {
     const data = JSON.parse(event.data);
     appendEvent('llm_stream: ' + (data.payload?.message || ''));

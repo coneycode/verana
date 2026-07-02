@@ -19,6 +19,11 @@ export interface ServerOptions {
 
 export async function buildServer(options: ServerOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
+  app.addHook("onRequest", async (request) => {
+    if (request.method === "POST" || request.method === "GET") {
+      console.log(`[${new Date().toISOString().slice(11, 19)}] ${request.method} ${request.url}`);
+    }
+  });
   app.removeContentTypeParser("application/json");
   app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
     try { done(null, body ? JSON.parse(body as string) : {}); }
@@ -94,16 +99,19 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   });
 
   app.post<{ Params: { id: string } }>("/projects/:id/run", async (request) => {
-    await runProject(options.rootDir, request.params.id, client, bus);
-    bus.publish(projectEvent("run_completed", request.params.id));
-    return getProject(options.rootDir, request.params.id);
+    // Run asynchronously — return immediately, push progress via SSE
+    runProject(options.rootDir, request.params.id, client, bus)
+      .then(() => { bus.publish(projectEvent("run_completed", request.params.id)); })
+      .catch((err) => { console.error(`[run] ${request.params.id} failed:`, err.message); bus.publish(projectEvent("run_failed", request.params.id, { error: err.message })); });
+    return { status: "running", projectId: request.params.id };
   });
 
   app.post<{ Params: { id: string; taskId: string } }>("/projects/:id/rerun/:taskId", async (request) => {
     const { rerunTask } = await import("./pipeline.js");
-    await rerunTask(options.rootDir, request.params.id, request.params.taskId, client, bus);
-    bus.publish(projectEvent("run_completed", request.params.id));
-    return getProject(options.rootDir, request.params.id);
+    rerunTask(options.rootDir, request.params.id, request.params.taskId, client, bus)
+      .then(() => { bus.publish(projectEvent("run_completed", request.params.id)); })
+      .catch((err) => { console.error(`[rerun] ${request.params.id}/${request.params.taskId} failed:`, err.message); bus.publish(projectEvent("run_failed", request.params.id, { error: err.message })); });
+    return { status: "running", projectId: request.params.id, taskId: request.params.taskId };
   });
 
   app.get<{ Params: { id: string; run: string } }>("/projects/:id/runs/:run", async (request) => {

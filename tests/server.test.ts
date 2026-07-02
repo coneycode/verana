@@ -39,7 +39,15 @@ test("Fastify server with LLM client exposes full solution-delivery loop via API
 
     const runResponse = await app.inject({ method: "POST", url: `/projects/${created.project.id}/run` });
     assert.equal(runResponse.statusCode, 200);
-    assert.equal(runResponse.json().status.workflows.solution.status, "final_review");
+    // run is async now — poll until workflow reaches final_review
+    let wfStatus = "";
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      const poll = await app.inject({ method: "GET", url: `/projects/${created.project.id}` });
+      wfStatus = poll.json().status.workflows.solution?.status ?? "";
+      if (wfStatus === "final_review" || wfStatus === "failed") break;
+    }
+    assert.equal(wfStatus, "final_review");
 
     const runLogResponse = await app.inject({ method: "GET", url: `/projects/${created.project.id}/runs/run-0001` });
     assert.equal(runLogResponse.statusCode, 200);

@@ -186,6 +186,7 @@ export async function runProject(rootDir: string, projectId: string, client: Llm
     state.status.active_task = task.id;
     task.status = "running";
     await saveProjectState(rootDir, state);
+    console.log(`[pipeline] ${projectId}: ${taskSpec.id} running (${runId})`);
     bus?.publish(projectEvent("task_updated", projectId, { taskId: task.id, status: "running", runId }));
 
     await executeLlmTask(rootDir, projectId, runId, taskSpec, spec, client, bus, task.feedback);
@@ -197,6 +198,7 @@ export async function runProject(rootDir: string, projectId: string, client: Llm
     task.runs = [...(task.runs ?? []), runId];
     task.status = verdict.passed ? "delivered" : "failed";
     await saveProjectState(rootDir, state);
+    console.log(`[pipeline] ${projectId}: ${taskSpec.id} ${task.status} (${runId})`);
     bus?.publish(projectEvent("task_updated", projectId, { taskId: task.id, status: task.status, runId, verdict }));
 
     // If task failed, stop (on_failure: stop_and_report)
