@@ -1,4 +1,4 @@
-import { readdir, readFile, mkdir, appendFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, mkdir, appendFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { parse, stringify } from "yaml";
 
@@ -51,6 +51,11 @@ export async function listProjects(rootDir: string): Promise<ProjectRecord[]> {
     entries.map(async (entry) => parseYaml<ProjectRecord>(join(dir, entry, "project.yaml"))),
   );
   return projects.sort((a, b) => a.created_at.localeCompare(b.created_at));
+}
+
+export async function deleteProject(rootDir: string, projectId: string): Promise<void> {
+  const dir = projectPath(rootDir, projectId);
+  await rm(dir, { recursive: true, force: true });
 }
 
 export async function getProject(rootDir: string, projectId: string): Promise<ProjectState> {

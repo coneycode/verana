@@ -7,7 +7,7 @@ import { parse } from "yaml";
 import { appendClarification, buildGoalSummary, nextClarificationQuestion } from "./clarifier.js";
 import { EventBus, projectEvent } from "./events.js";
 import { HttpLlmClient, loadConfig, type LlmClient } from "./llm.js";
-import { approveGate, getProject, listProjects, projectPath, rejectGate, saveProjectState } from "./project-store.js";
+import { approveGate, deleteProject, getProject, listProjects, projectPath, rejectGate, saveProjectState } from "./project-store.js";
 import { composeSolutionWorkflow, runProject } from "./pipeline.js";
 import { renderHomePage } from "./web.js";
 
@@ -40,6 +40,13 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   app.get("/projects", async () => listProjects(options.rootDir));
 
   app.get<{ Params: { id: string } }>("/projects/:id", async (request) => getProject(options.rootDir, request.params.id));
+
+  app.delete<{ Params: { id: string } }>("/projects/:id", async (request) => {
+    await deleteProject(options.rootDir, request.params.id);
+    console.log(`[delete] project ${request.params.id}`);
+    bus.publish(projectEvent("project_deleted", request.params.id));
+    return { status: "deleted", projectId: request.params.id };
+  });
 
   app.get<{ Params: { id: string } }>("/projects/:id/clarify", async (request) => {
     const state = await getProject(options.rootDir, request.params.id);

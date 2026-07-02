@@ -122,8 +122,9 @@ async function post(path, body = {}) { return api(path, { method:'POST', body: J
 
 async function loadProjects() {
   const projects = await api('/projects');
-  $('projects').innerHTML = projects.map(p => '<div class="project '+(p.id===selectedId?'active':'')+'" data-id="'+escapeHtml(p.id)+'"><div><b>'+escapeHtml(p.id)+'</b></div><div class="muted">'+escapeHtml(p.status)+'</div><div class="muted">'+escapeHtml(p.goal)+'</div></div>').join('');
-  document.querySelectorAll('.project').forEach(el => el.addEventListener('click', () => selectProject(el.dataset.id)));
+  $('projects').innerHTML = projects.map(p => '<div class="project '+(p.id===selectedId?'active':'')+'"><div class="row" style="justify-content:space-between"><div data-id="'+escapeHtml(p.id)+'"><b>'+escapeHtml(p.id)+'</b></div><button class="bad delete-btn" data-id="'+escapeHtml(p.id)+'" style="padding:2px 8px;font-size:11px">删除</button></div><div class="muted" data-id="'+escapeHtml(p.id)+'">'+escapeHtml(p.status)+'</div><div class="muted" data-id="'+escapeHtml(p.id)+'">'+escapeHtml(p.goal)+'</div></div>').join('');
+  document.querySelectorAll('.project [data-id]').forEach(el => el.addEventListener('click', () => selectProject(el.dataset.id)));
+  document.querySelectorAll('.delete-btn').forEach(el => el.addEventListener('click', (e) => { e.stopPropagation(); doDelete(el.dataset.id); }));
 }
 
 async function selectProject(id) {
@@ -401,6 +402,22 @@ async function doRerun(taskId) {
     await refresh();
   }
   catch(e) { alert(e.message); setBusy(false); }
+}
+
+async function doDelete(projectId) {
+  if (!confirm('确定删除项目 '+projectId+' ?此操作不可撤销。')) return;
+  try {
+    const res = await fetch('/projects/'+projectId, { method: 'DELETE' });
+    if (!res.ok) throw new Error(await res.text());
+    if (selectedId === projectId) {
+      selectedId = null;
+      state = null;
+      workflowSpec = null;
+      $('detail').style.display = 'none';
+      $('empty').style.display = 'block';
+    }
+    await loadProjects();
+  } catch(e) { alert(e.message); }
 }
 
 function setBusy(b) {
