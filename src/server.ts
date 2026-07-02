@@ -149,6 +149,20 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     return result;
   });
 
+  app.get<{ Params: { id: string } }>("/projects/:id/deliverables/export", async (request, reply) => {
+    const solDir = join(projectPath(options.rootDir, request.params.id), "solution");
+    const files: Array<{ path: string; content: string }> = [];
+    try {
+      await collectMarkdownFiles(solDir, solDir, files);
+    } catch { /* solution dir not found */ }
+    // Merge all deliverables into one markdown
+    const merged = files.map(f => `# ${f.path}\n\n${f.content}`).join("\n\n---\n\n");
+    const filename = `${request.params.id}-deliverables.md`;
+    reply.header("content-type", "text/markdown; charset=utf-8");
+    reply.header("content-disposition", `attachment; filename="${filename}"`);
+    return merged;
+  });
+
   app.post<{ Body: { goal: string } }>("/projects", async (request) => {
     const { createProject } = await import("./project-store.js");
     // Generate a short Chinese title for the project ID

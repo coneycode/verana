@@ -1,6 +1,14 @@
 const MD_RENDERER_JS = [
   "function markdownToHtml(md) {",
-  "  let s = String(md).replace(/[&<>\"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]});",
+  "  var s = String(md).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');",
+  "  var BT = String.fromCharCode(96);",
+  "  // Code blocks (triple backtick)",
+  "  var blocks = [];",
+  "  var codeRe = new RegExp(BT+BT+BT+'(\\\\w*)\\\\n?([\\\\s\\\\S]*?)'+BT+BT+BT, 'g');",
+  "  s = s.replace(codeRe, function(m, lang, code) {",
+  "    blocks.push('<pre style=\"background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:10px;overflow:auto;font-size:12px\">'+code.trim()+'</pre>');",
+  "    return '\\u0000CODEBLOCK'+(blocks.length-1)+'\\u0000';",
+  "  });",
   "  // Tables: consecutive lines starting with |",
   "  s = s.replace(/(^[\\|].+\\|\\n?)+/gm, function(block) {",
   "    var lines = block.trim().split('\\n').filter(function(l){return l.trim();});",
@@ -16,27 +24,44 @@ const MD_RENDERER_JS = [
   "    }",
   "    return html + '</table>';",
   "  });",
+  "  // Split into lines for block-level processing",
   "  var lines = s.split('\\n');",
-  "  var result = []; var inList = false;",
+  "  var result = []; var inUl = false; var inOl = false; var inBq = false;",
+  "  function closeLists() { if(inUl){result.push('</ul>');inUl=false;} if(inOl){result.push('</ol>');inOl=false;} }",
+  "  function closeBq() { if(inBq){result.push('</blockquote>');inBq=false;} }",
   "  for (var i=0; i<lines.length; i++) {",
   "    var line = lines[i];",
-  "    if (/^###### (.+)/.test(line)) { if(inList){result.push('</ul>');inList=false;} result.push('<h6>'+line.replace(/^###### /,'')+'</h6>'); }",
-  "    else if (/^##### (.+)/.test(line)) { if(inList){result.push('</ul>');inList=false;} result.push('<h5>'+line.replace(/^##### /,'')+'</h5>'); }",
-  "    else if (/^#### (.+)/.test(line)) { if(inList){result.push('</ul>');inList=false;} result.push('<h4>'+line.replace(/^#### /,'')+'</h4>'); }",
-  "    else if (/^### (.+)/.test(line)) { if(inList){result.push('</ul>');inList=false;} result.push('<h3>'+line.replace(/^### /,'')+'</h3>'); }",
-  "    else if (/^## (.+)/.test(line)) { if(inList){result.push('</ul>');inList=false;} result.push('<h2>'+line.replace(/^## /,'')+'</h2>'); }",
-  "    else if (/^# (.+)/.test(line)) { if(inList){result.push('</ul>');inList=false;} result.push('<h1>'+line.replace(/^# /,'')+'</h1>'); }",
-  "    else if (/^[\\-*] (.+)/.test(line)) { if(!inList){result.push('<ul>');inList=true;} result.push('<li>'+line.replace(/^[\\-*] /,'')+'</li>'); }",
-  "    else if (line.trim()==='') { if(inList){result.push('</ul>');inList=false;} result.push(''); }",
-  "    else { if(inList){result.push('</ul>');inList=false;} result.push('<p style=\"margin:4px 0\">'+line+'</p>'); }",
+  "    // Headings",
+  "    if (/^###### (.+)/.test(line)) { closeLists(); closeBq(); result.push('<h6>'+line.replace(/^###### /,'')+'</h6>'); }",
+  "    else if (/^##### (.+)/.test(line)) { closeLists(); closeBq(); result.push('<h5>'+line.replace(/^##### /,'')+'</h5>'); }",
+  "    else if (/^#### (.+)/.test(line)) { closeLists(); closeBq(); result.push('<h4>'+line.replace(/^#### /,'')+'</h4>'); }",
+  "    else if (/^### (.+)/.test(line)) { closeLists(); closeBq(); result.push('<h3>'+line.replace(/^### /,'')+'</h3>'); }",
+  "    else if (/^## (.+)/.test(line)) { closeLists(); closeBq(); result.push('<h2>'+line.replace(/^## /,'')+'</h2>'); }",
+  "    else if (/^# (.+)/.test(line)) { closeLists(); closeBq(); result.push('<h1>'+line.replace(/^# /,'')+'</h1>'); }",
+  "    // Horizontal rule",
+  "    else if (/^---+$/.test(line.trim())) { closeLists(); closeBq(); result.push('<hr style=\"border:none;border-top:1px solid #30363d;margin:10px 0\"/>'); }",
+  "    // Blockquote (escaped > becomes &gt;)",
+  "    else if (/^[&]gt; (.+)/.test(line)) { closeLists(); if(!inBq){result.push('<blockquote style=\"border-left:3px solid #3b82f6;padding-left:12px;margin:8px 0;color:#94a3b8\">');inBq=true;} result.push('<p style=\"margin:2px 0\">'+line.replace(/^[&]gt; /,'')+'</p>'); }",
+  "    // Unordered list",
+  "    else if (/^[\\-*] (.+)/.test(line)) { closeBq(); if(inOl){result.push('</ol>');inOl=false;} if(!inUl){result.push('<ul>');inUl=true;} result.push('<li>'+line.replace(/^[\\-*] /,'')+'</li>'); }",
+  "    // Ordered list",
+  "    else if (/^\\d+\\. (.+)/.test(line)) { closeBq(); if(inUl){result.push('</ul>');inUl=false;} if(!inOl){result.push('<ol>');inOl=true;} result.push('<li>'+line.replace(/^\\d+\\. /,'')+'</li>'); }",
+  "    // Empty line",
+  "    else if (line.trim()==='') { closeLists(); closeBq(); result.push(''); }",
+  "    // Already-processed HTML (code block placeholder, table, hr)",
+  "    else if (/^\\u0000CODEBLOCK/.test(line) || /^<table/.test(line) || /^<hr/.test(line)) { closeLists(); closeBq(); result.push(line); }",
+  "    // Normal paragraph",
+  "    else { closeLists(); closeBq(); result.push('<p style=\"margin:4px 0\">'+line+'</p>'); }",
   "  }",
-  "  if(inList) result.push('</ul>');",
+  "  closeLists(); closeBq();",
   "  var html = result.join('\\n');",
+  "  // Inline formatting: bold, italic, inline code",
   "  html = html.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');",
   "  html = html.replace(/\\*(.+?)\\*/g, '<em>$1</em>');",
-  "  var bt = String.fromCharCode(96);",
-  "  var codeRe = new RegExp(bt+'([^'+bt+']+)'+bt, 'g');",
-  "  html = html.replace(codeRe, '<code style=\"background:#1e293b;padding:1px 4px;border-radius:3px;font-size:12px\">$1</code>');",
+  "  var inlineCodeRe = new RegExp(BT+'([^'+BT+']+)'+BT, 'g');",
+  "  html = html.replace(inlineCodeRe, '<code style=\"background:#1e293b;padding:1px 4px;border-radius:3px;font-size:12px\">$1</code>');",
+  "  // Restore code blocks",
+  "  html = html.replace(/\\u0000CODEBLOCK(\\d+)\\u0000/g, function(m, idx) { return blocks[parseInt(idx)]; });",
   "  return html;",
   "}",
 ].join("\n");
@@ -267,17 +292,19 @@ function renderMain() {
 
   // --- Final review ---
   if (phase === 'final_review') {
-    el.innerHTML = '<div class="guide"><div class="guide-title">审核最终方案</div><div class="guide-desc">所有 task 已完成并通过验证。下方是交付物,请审核后确认闭环。</div><div class="row"><button class="good" id="approveFinalBtn">通过,方案闭环</button><button class="bad" id="showRejectFinalBtn">打回重做</button></div><div id="rejectFinalPanel" style="display:none;margin-top:8px"><textarea id="rejectFinalNote" placeholder="具体打回要求:哪里不对、要怎么改、期望什么结果"></textarea><button class="bad" id="rejectFinalBtn" style="margin-top:6px">确认打回</button></div></div><div id="deliverablesBox">正在加载交付物...</div>';
+    el.innerHTML = '<div class="guide"><div class="guide-title">审核最终方案</div><div class="guide-desc">所有 task 已完成并通过验证。下方是交付物,请审核后确认闭环。</div><div class="row"><button class="good" id="approveFinalBtn">通过,方案闭环</button><button class="bad" id="showRejectFinalBtn">打回重做</button><button class="secondary" id="exportMdBtn">导出 Markdown</button></div><div id="rejectFinalPanel" style="display:none;margin-top:8px"><textarea id="rejectFinalNote" placeholder="具体打回要求:哪里不对、要怎么改、期望什么结果"></textarea><button class="bad" id="rejectFinalBtn" style="margin-top:6px">确认打回</button></div></div><div id="deliverablesBox">正在加载交付物...</div>';
     $('approveFinalBtn').onclick = () => doApprove('final_review');
     $('showRejectFinalBtn').onclick = () => { $('rejectFinalPanel').style.display='block'; $('rejectFinalNote').focus(); };
     $('rejectFinalBtn').onclick = () => doReject('final_review');
+    const exportBtn = $('exportMdBtn'); if (exportBtn) exportBtn.onclick = () => doExportMd();
     loadDeliverables();
     return;
   }
 
   // --- Approved ---
   if (phase === 'approved') {
-    el.innerHTML = '<div class="guide"><div class="guide-title" style="color:var(--ok)">方案闭环完成</div><div class="guide-desc">方案阶段已结束。最终交付物如下:</div></div><div id="deliverablesBox">正在加载交付物...</div>';
+    el.innerHTML = '<div class="guide"><div class="guide-title" style="color:var(--ok)">方案闭环完成</div><div class="guide-desc">方案阶段已结束。最终交付物如下:</div><div class="row"><button class="secondary" id="exportMdBtn">导出 Markdown</button></div></div><div id="deliverablesBox">正在加载交付物...</div>';
+    const exportBtn2 = $('exportMdBtn'); if (exportBtn2) exportBtn2.onclick = () => doExportMd();
     loadDeliverables();
     return;
   }
@@ -456,6 +483,10 @@ async function doRerun(taskId) {
     setBusy(false);
     await refresh();
   } catch(e) { alert(e.message); setBusy(false); }
+}
+
+function doExportMd() {
+  window.open('/projects/'+selectedId+'/deliverables/export', '_blank');
 }
 
 async function doDelete(projectId) {
