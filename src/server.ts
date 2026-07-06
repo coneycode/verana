@@ -190,12 +190,27 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   });
 
   app.get<{ Params: { id: string }; Querystring: { once?: string } }>("/projects/:id/events", async (request, reply) => {
+    // 项目不存在时直接 404,不写 SSE header(避免删项目后 SSE 连接崩进程)
+    const projectDir = projectPath(options.rootDir, request.params.id);
+    try {
+      await (await import("node:fs/promises")).access(projectDir);
+    } catch {
+      reply.code(404).send({ error: "project not found" });
+      return;
+    }
     reply.raw.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
       connection: "keep-alive",
     });
-    reply.raw.write(`event: snapshot\ndata: ${JSON.stringify(await getProject(options.rootDir, request.params.id))}\n\n`);
+    let snapshotData: unknown;
+    try {
+      snapshotData = await getProject(options.rootDir, request.params.id);
+    } catch {
+      reply.raw.end();
+      return;
+    }
+    reply.raw.write(`event: snapshot\ndata: ${JSON.stringify(snapshotData)}\n\n`);
     if (request.query.once === "1") {
       reply.raw.end();
       return;
