@@ -29,55 +29,65 @@ export function fakeClarifierQuestion() {
   return { question: "你要监控哪些平台?", risk: "不澄清会导致方案偏掉。" };
 }
 
-export function fakeComposerWorkflow() {
-  return {
-    clarified: "调研海外红人监控系统,覆盖数据源和合规",
-    acceptance: ["覆盖 3 类方案", "有推荐和理由"],
-    tasks: [
-      {
-        id: "t1",
-        desc: "调研数据源方案",
-        agent: "researcher",
-        skills: ["web-research"],
-        depends_on: [],
-        outputs: [{ path: "solution/research/findings.md", desc: "调研记录" }],
-        checks: [{ method: "file_exists" as const, target: "solution/research/findings.md", desc: "非空" }],
-      },
-      {
-        id: "t2",
-        desc: "分析推荐",
-        agent: "analyst",
-        depends_on: ["t1"],
-        inputs: [{ path: "solution/research/findings.md", desc: "调研记录" }],
-        outputs: [{ path: "solution/solution.md", desc: "方案" }],
-        checks: [{ method: "llm_rubric" as const, desc: "有推荐" }],
-      },
-      {
-        id: "t3",
-        desc: "审查方案",
-        agent: "critic",
-        depends_on: ["t2"],
-        inputs: [{ path: "solution/solution.md", desc: "方案" }],
-        outputs: [{ path: "solution/review.md", desc: "审查报告" }],
-        checks: [{ method: "llm_rubric" as const, desc: "有审查意见" }],
-      },
-    ],
-  };
-}
-
-export function fakeVerifierPassed() {
-  return { passed: true, reasons: ["内容满足验收"], evidence: ["solution/research/findings.md"] };
-}
-
 export function fakeExecutorContent() {
   return "# 交付内容\n\n这是 fake LLM 产出的交付物。";
 }
 
+/**
+ * buildSmartFakeClient — 支持图工作流引擎的各类 LLM 响应:
+ * - clarifier(澄清问题)
+ * - scheduler(调度大脑:选节点+理由)
+ * - executor(节点执行:产出内容)
+ * - cross_check(轻节点交叉验证)
+ * - verifier(重节点验证)
+ * - guardrail(软护栏检查)
+ * - blackboard_update(记忆更新)
+ */
 export function buildSmartFakeClient(): FakeLlmClient {
-  return new FakeLlmClient((role, system) => {
-    if (role === "composer" && system.includes("workflow 架构师")) return { json: fakeComposerWorkflow() };
+  let callCount = 0;
+  return new FakeLlmClient((role, system, user) => {
+    // Clarifier
     if (role === "composer" && system.includes("方案澄清助手")) return { json: fakeClarifierQuestion() };
+
+    // Scheduler(调度大脑)
+    if (role === "composer" && system.includes("调度大脑")) {
+      // 第一次选入口节点,之后判断完成
+      callCount++;
+      if (callCount <= 2) {
+        return { json: { next_node: "write_chapter", reason: "继续写下一章", capability_gap: "", is_complete: false } };
+      }
+      return { json: { next_node: "", reason: "已写到目标章数", capability_gap: "", is_complete: true } };
+    }
+
+    // Capability gap review
+    if (role === "composer" && system.includes("workflow 规划者")) {
+      return { json: { reasonable: false, reason: "测试:不需要新能力" } };
+    }
+
+    // Cross check(轻节点交叉验证)
+    if (role === "evaluator" && system.includes("独立验证者") && system.includes("判断另一个模型")) {
+      return { json: { agree: true, reason: "独立判断一致" } };
+    }
+
+    // Verifier(重节点验证)
+    if (role === "evaluator" && system.includes("独立的验收者")) {
+      return { json: { passed: true, reasons: ["内容满足验收"], evidence: [] } };
+    }
+
+    // Soft guardrail
+    if (role === "evaluator" && system.includes("安全护栏检查者")) {
+      return { json: { hit: false } };
+    }
+
+    // Blackboard update
+    if (role === "composer" && system.includes("记忆维护者")) {
+      return { json: { updates: { summary: "第1章摘要:主角登场" } } };
+    }
+
+    // Executor(节点执行)
     if (role === "composer") return { complete: fakeExecutorContent() };
-    return { json: fakeVerifierPassed() };
+
+    // Fallback
+    return { json: { passed: true, reasons: ["ok"], evidence: [] } };
   });
 }

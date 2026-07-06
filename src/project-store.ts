@@ -2,7 +2,7 @@ import { readdir, readFile, mkdir, appendFile, writeFile, rm } from "node:fs/pro
 import { join } from "node:path";
 import { parse, stringify } from "yaml";
 
-import type { GateRecord, ProjectRecord, ProjectState, StatusRecord, WorkflowPhase, WorkflowRecord } from "./types.js";
+import type { ProjectRecord, ProjectState, StatusRecord, WorkflowPhase, GraphRuntime } from "./types.js";
 
 export async function createProject(rootDir: string, rawGoal: string, title?: string): Promise<ProjectRecord> {
   const id = buildProjectId(rawGoal, title);
@@ -80,15 +80,25 @@ export async function saveProjectState(rootDir: string, state: ProjectState): Pr
   ]);
 }
 
+/** 审批门:plan_review / final_review 的 approve/reject。图模型下是状态切换 */
 export async function approveGate(rootDir: string, projectId: string, gateId: string, note = ""): Promise<void> {
   const state = await getProject(rootDir, projectId);
   const phase = requireActiveWorkflow(state.status);
-  const workflow = requireWorkflow(state.status, phase);
-  const gate = findGate(workflow, gateId);
+  const wf = requireWorkflow(state.status, phase);
 
-  workflow.status = gate.on_approve?.next ?? "approved";
-  if (workflow.status === "approved" && phase === "solution") {
-    state.project.status = "solution_approved";
+  if (gateId === "plan_review") {
+    wf.workflow_status = "executing";
+  } else if (gateId === "final_review") {
+    wf.workflow_status = "approved";
+    if (phase === "solution") {
+      state.project.status = "solution_approved";
+    }
+  } else {
+    // 人审放行(awaiting_human → executing)
+    wf.workflow_status = "executing";
+    wf.awaiting = "none";
+    wf.awaiting_reason = undefined;
+    wf.awaiting_scene = undefined;
   }
 
   await appendDecision(rootDir, projectId, `approved ${gateId}`, note);
@@ -98,20 +108,23 @@ export async function approveGate(rootDir: string, projectId: string, gateId: st
 export async function rejectGate(rootDir: string, projectId: string, gateId: string, feedback: string): Promise<void> {
   const state = await getProject(rootDir, projectId);
   const phase = requireActiveWorkflow(state.status);
-  const workflow = requireWorkflow(state.status, phase);
-  const gate = findGate(workflow, gateId);
-  const bounce = gate.on_reject;
-  if (!bounce) throw new Error(`Gate ${gateId} does not define a reject path`);
+  const wf = requireWorkflow(state.status, phase);
 
-  const affected = downstreamTasks(workflow, bounce.bounce_to);
-  for (const taskId of affected) {
-    const task = workflow.tasks[taskId];
-    if (!task) continue;
-    task.status = "pending";
-    task.feedback = [...(task.feedback ?? []), feedback];
+  if (gateId === "plan_review") {
+    // 打回 plan:回 composing(重新规划)
+    wf.workflow_status = "composing";
+  } else if (gateId === "final_review") {
+    // 打回 final:回 executing 继续跑(调度大脑会基于反馈继续)
+    wf.workflow_status = "executing";
+    wf.awaiting = "none";
+    wf.awaiting_reason = undefined;
+    wf.awaiting_scene = undefined;
+    wf.blackboard["human_direction"] = feedback;
+  } else {
+    // 人审拒绝(放弃/叫停)
+    wf.workflow_status = "failed";
+    wf.awaiting = "none";
   }
-  workflow.status = "executing";
-  state.status.active_task = bounce.bounce_to;
 
   await appendDecision(rootDir, projectId, `rejected ${gateId}`, feedback);
   await saveProjectState(rootDir, state);
@@ -132,6 +145,7 @@ export async function parseYaml<T>(path: string): Promise<T> {
 async function createProjectSkeleton(rootDir: string, projectDir: string): Promise<void> {
   const dirs = [
     join(projectDir, "solution", "research", "evidence"),
+    join(projectDir, "solution", "snapshots"),
     join(projectDir, "implementation"),
     join(projectDir, "agents"),
     join(projectDir, "skills"),
@@ -170,37 +184,15 @@ function requireActiveWorkflow(status: StatusRecord): WorkflowPhase {
   return status.active_workflow;
 }
 
-function requireWorkflow(status: StatusRecord, phase: WorkflowPhase): WorkflowRecord {
+function requireWorkflow(status: StatusRecord, phase: WorkflowPhase): GraphRuntime {
   const workflow = status.workflows[phase];
   if (!workflow) throw new Error(`Workflow ${phase} does not exist`);
   return workflow;
 }
 
-function findGate(workflow: WorkflowRecord, gateId: string): GateRecord {
-  const gate = workflow.gates.find((candidate) => candidate.id === gateId);
-  if (!gate) throw new Error(`Gate ${gateId} does not exist`);
-  return gate;
-}
-
-function downstreamTasks(workflow: WorkflowRecord, startTaskId: string): string[] {
-  const result = new Set<string>([startTaskId]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const task of Object.values(workflow.tasks)) {
-      if (!result.has(task.id) && (task.depends_on ?? []).some((dependency) => result.has(dependency))) {
-        result.add(task.id);
-        changed = true;
-      }
-    }
-  }
-  return [...result];
-}
-
 function buildProjectId(rawGoal: string, title?: string): string {
   const date = new Date().toISOString().slice(0, 10);
   if (title) {
-    // Sanitize title: keep Chinese, alphanum, remove punctuation/whitespace
     const clean = title.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 10);
     return `${date}-${clean || slugify(rawGoal)}`;
   }
@@ -208,7 +200,6 @@ function buildProjectId(rawGoal: string, title?: string): string {
 }
 
 function slugify(input: string): string {
-  // Fallback: first few chars of goal, stripped of punctuation
   const clean = input.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 8);
   return clean || "project";
 }

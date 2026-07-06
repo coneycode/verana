@@ -1,402 +1,56 @@
-import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parse } from "yaml";
 
 import type { LlmClient } from "./llm.js";
-import { EventBus, projectEvent } from "./events.js";
 import { getProject, projectPath, saveProjectState, writeYaml } from "./project-store.js";
-import type { GateRecord, TaskSpec, VerdictRecord, WorkflowRecord, WorkflowSpec } from "./types.js";
-import { validateWorkflowSpec } from "./workflow-validator.js";
+import type { GraphWorkflowSpec, GraphRuntime } from "./types.js";
+import { validateGraphWorkflow } from "./workflow-validator.js";
 
-const COMPOSER_SYSTEM = `你是一个 workflow 架构师。根据用户目标,合成一个方案调研阶段的执行 workflow。
+// 重导出图执行引擎
+export { runGraphProject, readGraphSpec, applyHumanVerdict } from "./graph-engine.js";
 
-你必须返回 JSON,结构如下:
-{
-  "clarified": "澄清后的目标描述",
-  "acceptance": ["验收标准1", "验收标准2", ...],
-  "tasks": [
-    {
-      "id": "t1",
-      "desc": "这个 task 做什么事的详细自然语言描述",
-      "agent": "researcher|analyst|critic",
-      "skills": ["skill-name"],
-      "depends_on": [],
-      "inputs": [{"path": "solution/research/xxx.md", "desc": "说明"}],
-      "outputs": [{"path": "solution/xxx.md", "desc": "说明"}],
-      "checks": [{"method": "file_exists|llm_rubric", "target": "路径(file_exists时)", "desc": "验收描述"}]
-    }
-  ]
-}
-
-规则:
-- 3-5 个 task,形成 DAG(后续 task 的 depends_on 指向前面的)
-- 第一个 task 用 researcher 做调研,产出 solution/research/findings.md
-- 中间 task(如有)用 analyst 做深入分析,产出放在 solution/research/ 下(如 solution/research/analysis.md),不能放在 solution/ 根目录
-- 倒数第二个用 analyst 做分析推荐,产出 **solution/solution.md** —— 这是最终交付物
-- 最后一个用 critic 做审查,产出 **solution/review.md**
-- 每个 task 必须有 checks(至少一条)
-- 中间 task 的 inputs 要引用上游 task 的 outputs path
-- 用中文写 desc
-- agent 只能是 researcher / analyst / critic 之一
-- method 只能是 file_exists / llm_rubric 之一
-
-路径约定(不可违反):
-- solution/solution.md — 最终方案交付物(用户看这个),由倒数第二个 task 产出
-- solution/review.md — 审查报告,由最后一个 task 产出
-- solution/research/*.md — 所有中间产物(调研记录、分析文档等),只能放在 research/ 子目录下
-- 除 solution.md 和 review.md 外,solution/ 根目录不得有其他 .md 文件`;
-
-export async function composeSolutionWorkflow(rootDir: string, projectId: string, client: LlmClient): Promise<WorkflowSpec> {
+/**
+ * [TEMP] composeGraphWorkflow — 临时占位。
+ * 后续完整实现:Composer 规划(判断任务性质 → 列能力清单 → 定护栏 → 设计 blackboard schema)
+ * 目前:手写样例 workflow.yaml 验证执行引擎。真正调用此函数时走 LLM 规划(待实现)。
+ */
+export async function composeGraphWorkflow(
+  rootDir: string,
+  projectId: string,
+  _client: LlmClient,
+  spec: GraphWorkflowSpec,
+): Promise<GraphWorkflowSpec> {
   const state = await getProject(rootDir, projectId);
-  const clarifications = state.status.clarifier?.clarifications ?? [];
-  const userPrompt = buildComposerPrompt(state.project.goal, clarifications);
-
-  const llmResult = await client.completeJson<{
-    clarified: string;
-    acceptance: string[];
-    tasks: Array<{
-      id: string;
-      desc: string;
-      agent: string;
-      skills?: string[];
-      depends_on?: string[];
-      inputs?: Array<{ path?: string; desc: string }>;
-      outputs: Array<{ path: string; desc: string }>;
-      checks: Array<{ method: "command" | "file_exists" | "llm_rubric" | "manual"; target?: string; desc: string }>;
-    }>;
-  }>("composer", COMPOSER_SYSTEM, userPrompt);
-
-  const workflow = assembleWorkflow(projectId, state.project.goal, llmResult);
-  const validation = validateWorkflowSpec(workflow);
-  if (!validation.passed) throw new Error(`Generated workflow failed hard checks: ${validation.errors.join("; ")}`);
-
   const dir = projectPath(rootDir, projectId);
-  await writeGeneratedResources(dir, workflow, llmResult);
+
+  const validation = validateGraphWorkflow(spec);
+  if (!validation.passed) throw new Error(`Workflow failed hard checks: ${validation.errors.join("; ")}`);
+
+  await writeYaml(join(dir, "solution", "workflow.yaml"), spec);
+  await mkdir(join(dir, "agents"), { recursive: true });
+  for (const agentName of spec.agents) {
+    await writeYaml(join(dir, "agents", `${agentName}.yaml`), { name: agentName, role: agentName });
+  }
 
   state.project.status = "solutioning";
   state.status.active_workflow = "solution";
-  state.status.workflows.solution = {
-    phase: "solution",
-    status: "plan_review",
-    selected_executor: workflow.selected_executor,
-    required_capabilities: workflow.required_capabilities,
-    tasks: Object.fromEntries(workflow.tasks.map((task) => [task.id, { id: task.id, status: "pending", depends_on: task.depends_on ?? [] }])),
-    gates: workflow.gates,
+  state.status.flow_type = "graph";
+  const runtime: GraphRuntime = {
+    workflow_status: "plan_review",
+    selected_executor: spec.selected_executor,
+    required_capabilities: spec.required_capabilities,
+    current_node: null,
+    iteration: 0,
+    awaiting: "none",
+    blackboard: {},
+    runs: {},
+    node_retries: {},
+    capabilities_added: [],
   };
+  state.status.workflows.solution = runtime;
   await saveProjectState(rootDir, state);
-  return workflow;
+  return spec;
 }
 
-function buildComposerPrompt(goal: string, clarifications: Array<{ q: string; a: string; risk: string }>): string {
-  const lines = [`目标: ${goal}`, ""];
-  if (clarifications.length > 0) {
-    lines.push("已澄清信息:");
-    for (const entry of clarifications) {
-      lines.push(`  Q: ${entry.q}`);
-      lines.push(`  A: ${entry.a}`);
-    }
-  }
-  lines.push("");
-  lines.push("请合成方案调研阶段的 workflow。");
-  return lines.join("\n");
-}
-
-function assembleWorkflow(
-  projectId: string,
-  rawGoal: string,
-  llmResult: { clarified: string; acceptance: string[]; tasks: TaskSpec[] },
-): WorkflowSpec {
-  const gates: GateRecord[] = [
-    {
-      id: "plan_review",
-      type: "human_approval",
-      title: "任务拆解确认",
-      options: ["approve", "reject"],
-      on_approve: { writes: "decisions.md", next: "executing" },
-      audit: true,
-    },
-    {
-      id: "final_review",
-      type: "human_approval",
-      title: "方案审查确认",
-      options: ["approve", "reject"],
-      on_approve: { writes: "decisions.md", next: "approved" },
-      on_reject: { bounce_to: llmResult.tasks[1]?.id ?? llmResult.tasks[0]?.id ?? "t1", cascade: "downstream", feedback_to_context: true },
-      audit: true,
-    },
-  ];
-
-  return {
-    version: "0.1",
-    project_id: projectId,
-    phase: "solution",
-    goal: {
-      raw: rawGoal,
-      clarified: llmResult.clarified || rawGoal,
-      deliverable_type: "research",
-      acceptance: llmResult.acceptance,
-    },
-    clarifications: [],
-    required_capabilities: ["web", "browser", "long_running"],
-    selected_executor: "hermes",
-    agents: [...new Set(llmResult.tasks.map((task) => task.agent))],
-    skills: [...new Set(llmResult.tasks.flatMap((task) => task.skills ?? []))],
-    scripts: [],
-    tasks: llmResult.tasks,
-    gates,
-    policies: { long_running: { idle_watchdog: "30m", max_wall: "4h" }, on_failure: "stop_and_report" },
-  };
-}
-
-async function writeGeneratedResources(dir: string, workflow: WorkflowSpec, llmResult: unknown): Promise<void> {
-  await writeYaml(join(dir, "solution", "workflow.yaml"), workflow);
-  await writeYaml(join(dir, "solution", "self-check.yaml"), {
-    hard_checks: { passed: true, checks: ["dag_acyclic", "checks_present", "executor_capabilities"] },
-    evaluation: { model_role: "evaluator", note: "LLM-composed workflow, hard-checked by code" },
-  });
-
-  for (const agentName of workflow.agents) {
-    await writeYaml(join(dir, "agents", `${agentName}.yaml`), { name: agentName, role: agentName });
-  }
-  for (const skillName of workflow.skills) {
-    await writeSkill(dir, skillName, skillName, `Skill ${skillName} for the workflow.`);
-  }
-}
-
-async function writeSkill(projectDir: string, name: string, title: string, body: string): Promise<void> {
-  const dir = join(projectDir, "skills", name);
-  await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, "SKILL.md"), `---\nname: ${name}\n---\n\n# ${title}\n\n${body}\n`, "utf8");
-}
-
-export async function runProject(rootDir: string, projectId: string, client: LlmClient, bus?: EventBus): Promise<void> {
-  const state = await getProject(rootDir, projectId);
-  const workflow = state.status.workflows.solution;
-  if (!workflow) throw new Error("Solution workflow does not exist");
-  if (workflow.status !== "executing") throw new Error(`Workflow is not executable from ${workflow.status}`);
-
-  const spec = await readWorkflowSpec(rootDir, projectId);
-  let runNumber = await nextRunNumber(rootDir, projectId);
-  for (const taskSpec of spec.tasks) {
-    const task = workflow.tasks[taskSpec.id];
-    if (!task || task.status === "delivered") continue;
-    if (!dependenciesDelivered(workflow, taskSpec)) continue;
-
-    const runId = `run-${String(runNumber++).padStart(4, "0")}`;
-    state.status.active_task = task.id;
-    task.status = "running";
-    await saveProjectState(rootDir, state);
-    console.log(`[pipeline] ${projectId}: ${taskSpec.id} running (${runId})`);
-    bus?.publish(projectEvent("task_updated", projectId, { taskId: task.id, status: "running", runId }));
-
-    await executeLlmTask(rootDir, projectId, runId, taskSpec, spec, client, bus, task.feedback);
-    task.status = "verifying";
-    await saveProjectState(rootDir, state);
-    bus?.publish(projectEvent("task_updated", projectId, { taskId: task.id, status: "verifying", runId }));
-
-    const verdict = await verifyLlmTask(rootDir, projectId, runId, taskSpec, client, bus);
-    task.runs = [...(task.runs ?? []), runId];
-    task.status = verdict.passed ? "delivered" : "failed";
-    await saveProjectState(rootDir, state);
-    console.log(`[pipeline] ${projectId}: ${taskSpec.id} ${task.status} (${runId})`);
-    bus?.publish(projectEvent("task_updated", projectId, { taskId: task.id, status: task.status, runId, verdict }));
-
-    // If task failed, stop (on_failure: stop_and_report)
-    if (!verdict.passed) break;
-  }
-
-  if (Object.values(workflow.tasks).every((task) => task.status === "delivered")) {
-    workflow.status = "final_review";
-    state.status.active_task = null;
-    await saveProjectState(rootDir, state);
-    bus?.publish(projectEvent("status_changed", projectId, { status: "final_review" }));
-  }
-}
-
-export async function rerunTask(rootDir: string, projectId: string, taskId: string, client: LlmClient, bus?: EventBus): Promise<void> {
-  const state = await getProject(rootDir, projectId);
-  const workflow = state.status.workflows.solution;
-  if (!workflow) throw new Error("Solution workflow does not exist");
-
-  // Find the task and all downstream dependents
-  const spec = await readWorkflowSpec(rootDir, projectId);
-  const downstream = collectDownstream(spec, taskId);
-
-  // Reset: the target task + all downstream → pending
-  for (const id of downstream) {
-    const task = workflow.tasks[id];
-    if (task) {
-      task.status = "pending";
-      task.runs = [];
-      task.feedback = [];
-    }
-  }
-
-  // If workflow was in final_review/blocked/failed, move back to executing
-  if (workflow.status !== "executing") {
-    workflow.status = "executing";
-  }
-  state.status.active_task = taskId;
-  await saveProjectState(rootDir, state);
-  bus?.publish(projectEvent("task_updated", projectId, { taskId, status: "pending", rerun: true }));
-
-  // Now run the DAG from the target task
-  await runProject(rootDir, projectId, client, bus);
-}
-
-function collectDownstream(spec: WorkflowSpec, startTaskId: string): string[] {
-  const result = new Set<string>([startTaskId]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const task of spec.tasks) {
-      if (!result.has(task.id) && (task.depends_on ?? []).some((dep) => result.has(dep))) {
-        result.add(task.id);
-        changed = true;
-      }
-    }
-  }
-  return [...result];
-}
-
-async function readWorkflowSpec(rootDir: string, projectId: string): Promise<WorkflowSpec> {
-  return parse(await readFile(join(projectPath(rootDir, projectId), "solution", "workflow.yaml"), "utf8")) as WorkflowSpec;
-}
-
-function dependenciesDelivered(workflow: WorkflowRecord, taskSpec: TaskSpec): boolean {
-  return (taskSpec.depends_on ?? []).every((dependency) => workflow.tasks[dependency]?.status === "delivered");
-}
-
-const EXECUTOR_SYSTEM = `你是一个方案调研执行者。根据 task 描述,产出该 task 的交付物内容。
-
-规则:
-- 用中文写,Markdown 格式
-- 内容要具体、有实质,不要空话
-- 直接输出内容正文,不要加多余说明
-- 如果是调研 task,列出具体候选方案、字段、限制、成本、合规
-- 如果是分析 task,给出对比表、推荐方案和理由、实施任务拆解
-- 如果是审查 task,列出假设、遗漏、风险`;
-
-async function executeLlmTask(rootDir: string, projectId: string, runId: string, task: TaskSpec, spec: WorkflowSpec, client: LlmClient, bus?: EventBus, feedback?: string[]): Promise<void> {
-  const dir = projectPath(rootDir, projectId);
-  const runDir = join(dir, "runs", runId);
-  await mkdir(runDir, { recursive: true });
-  const streamPath = join(runDir, "stream.md");
-  await writeFile(streamPath, `# Run ${runId} — Task ${task.id}\n\n## 执行中...\n\n`, "utf8");
-
-  const inputContents: string[] = [];
-  for (const input of task.inputs ?? []) {
-    if (input.path) {
-      try {
-        inputContents.push(`\n--- ${input.path} ---\n${await readFile(join(dir, input.path), "utf8")}`);
-      } catch {
-        // input not available yet
-      }
-    }
-  }
-
-  const userPromptLines = [
-    `项目目标: ${spec.goal.clarified}`,
-    "",
-    `Task: ${task.id}`,
-    `描述: ${task.desc}`,
-    "",
-    inputContents.length > 0 ? `上游输入:${inputContents.join("\n")}` : "无上游输入。",
-  ];
-  if (feedback && feedback.length > 0) {
-    userPromptLines.push("", "【打回反馈】以下是审核者提出的具体要求,请据此调整:", ...feedback.map((f, i) => `${i + 1}. ${f}`));
-  }
-  userPromptLines.push("", "请产出本 task 的交付物内容。");
-  const userPrompt = userPromptLines.join("\n");
-
-  bus?.publish(projectEvent("llm_stream", projectId, { runId, taskId: task.id, phase: "executing", message: "正在调用 LLM 生成交付物..." }));
-
-  const content = await client.complete("composer", EXECUTOR_SYSTEM, userPrompt);
-
-  // Write full LLM output to stream.md and publish event
-  await appendFile(streamPath, `\n## LLM 原始输出\n\n${content}\n`, "utf8");
-  bus?.publish(projectEvent("llm_stream", projectId, { runId, taskId: task.id, phase: "executing", message: "LLM 输出完成，正在写入交付物...", content }));
-
-  for (const output of task.outputs) {
-    const outputPath = join(dir, output.path);
-    if (output.path.endsWith("/")) {
-      await mkdir(outputPath, { recursive: true });
-      await writeFile(join(outputPath, "content.md"), content, "utf8");
-    } else {
-      await mkdir(join(outputPath, ".."), { recursive: true });
-      await writeFile(outputPath, content, "utf8");
-    }
-  }
-
-  await writeFile(join(runDir, "claim.md"), `# Claim\n\nTask ${task.id} executed by LLM.\n\nAgent: ${task.agent}\n\nClaim: ${content.slice(0, 200)}...\n`, "utf8");
-  await appendFile(streamPath, `\n## 交付物已写入\n\n${task.outputs.map(o => o.path).join(", ")}\n`, "utf8");
-}
-
-const VERIFIER_SYSTEM = `你是一个独立的验收者(verifier)。你的任务是判断 task 的交付物是否满足验收标准。
-
-你必须返回 JSON:
-{"passed": true/false, "reasons": ["理由1", ...], "evidence": ["证据文件路径或内容引用"]}
-
-规则:
-- 你是独立于执行者的,不要相信执行者的自述,要自己检查内容
-- passed=true 仅当内容确实满足验收标准
-- reasons 要具体,说明哪些满足了、哪些没满足
-- 用中文`;
-
-async function verifyLlmTask(rootDir: string, projectId: string, runId: string, task: TaskSpec, client: LlmClient, bus?: EventBus): Promise<VerdictRecord> {
-  const dir = projectPath(rootDir, projectId);
-  const runDir = join(dir, "runs", runId);
-  const streamPath = join(runDir, "stream.md");
-
-  const outputContents: string[] = [];
-  for (const output of task.outputs) {
-    const targetPath = output.path.endsWith("/") ? join(output.path, "content.md") : output.path;
-    try {
-      const content = await readFile(join(dir, targetPath), "utf8");
-      outputContents.push(`\n--- ${output.path} ---\n${content}`);
-    } catch {
-      outputContents.push(`\n--- ${output.path} ---\n(文件不存在)`);
-    }
-  }
-
-  const checkDescs = task.checks.map((check) => `- [${check.method}] ${check.desc}${check.target ? ` (target: ${check.target})` : ""}`).join("\n");
-  const userPrompt = [
-    `Task: ${task.id}`,
-    `描述: ${task.desc}`,
-    "",
-    "验收标准:",
-    checkDescs,
-    "",
-    "交付物内容:",
-    outputContents.join("\n"),
-    "",
-    "请独立判断交付物是否满足验收标准。",
-  ].join("\n");
-
-  bus?.publish(projectEvent("llm_stream", projectId, { runId, taskId: task.id, phase: "verifying", message: "正在调用验证模型判定..." }));
-
-  const llmResult = await client.completeJson<{ passed: boolean; reasons: string[]; evidence: string[] }>("evaluator", VERIFIER_SYSTEM, userPrompt);
-
-  await appendFile(streamPath, `\n## 验证结果\n\npassed: ${llmResult.passed}\nreasons: ${(llmResult.reasons ?? []).join("; ")}\n`, "utf8");
-  bus?.publish(projectEvent("llm_stream", projectId, { runId, taskId: task.id, phase: "verifying", message: `验证完成: ${llmResult.passed ? "通过" : "未通过"}` }));
-
-  const verdict: VerdictRecord = {
-    passed: llmResult.passed,
-    method: "combined",
-    reasons: llmResult.reasons ?? [],
-    evidence: llmResult.evidence ?? [],
-  };
-  await writeYaml(join(dir, "runs", runId, "verdict.yaml"), verdict);
-  return verdict;
-}
-
-async function nextRunNumber(rootDir: string, projectId: string): Promise<number> {
-  const { readdir } = await import("node:fs/promises");
-  const runs = await readdir(join(projectPath(rootDir, projectId), "runs"));
-  const max = runs
-    .map((entry) => /^run-(\d+)$/.exec(entry)?.[1])
-    .filter((value): value is string => Boolean(value))
-    .map(Number)
-    .reduce((current, value) => Math.max(current, value), 0);
-  return max + 1;
-}
+// 旧 composeSolutionWorkflow 已退役 — 现由 composeGraphWorkflow 替代
+// 旧 runProject / rerunTask 已退役 — 现由 graph-engine.runGraphProject 替代

@@ -1,65 +1,52 @@
-import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { test } from "node:test";
+import assert from "node:assert";
+import { rm, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import test from "node:test";
 import { parse } from "yaml";
+import { createProject, getProject } from "../src/project-store.js";
+import { composeGraphWorkflow } from "../src/pipeline.js";
+import type { GraphWorkflowSpec } from "../src/types.js";
+import type { LlmClient, ModelRole } from "../src/llm.js";
 
-import { FakeLlmClient, fakeComposerWorkflow, fakeExecutorContent, fakeVerifierPassed } from "../src/fake-llm.js";
-import { approveGate, createProject, getProject } from "../src/project-store.js";
-import { composeSolutionWorkflow, runProject } from "../src/pipeline.js";
-import type { ModelRole } from "../src/llm.js";
+const TMP = join(process.cwd(), "tmp-test-pipe");
 
-function buildFakeClient() {
-  return new FakeLlmClient((role: ModelRole) => {
-    if (role === "composer") {
-      const user = "";
-      void user;
-      return { json: fakeComposerWorkflow(), complete: fakeExecutorContent() };
-    }
-    return { json: fakeVerifierPassed() };
-  });
+// fake client (composeGraphWorkflow 暂时不调 LLM,但保留接口)
+const fakeClient: LlmClient = {
+  complete: async (_r: ModelRole, _s: string, _u: string) => "",
+  completeJson: async <T,>(_r: ModelRole, _s: string, _u: string): Promise<T> => ({}) as T,
+};
+
+function makeSpec(pid: string): GraphWorkflowSpec {
+  return {
+    version: "0.2", project_id: pid, phase: "solution", flow_type: "graph",
+    goal: { raw: "写小说", clarified: "写20章悬疑小说", deliverable_type: "creative", iterative: true, acceptance: ["每章3000字"] },
+    clarifications: [], required_capabilities: ["web"], selected_executor: "hermes",
+    agents: ["writer"], skills: [], scripts: [],
+    capabilities: [
+      { id: "write_chapter", kind: "agent", desc: "写一章", checks: [{ method: "llm_rubric", desc: ">=3000字" }], updates: ["summary"] },
+      { id: "update_memory", kind: "light", desc: "更新摘要", checks: [{ method: "llm_rubric", desc: "摘要有界" }], updates: ["summary"] },
+    ],
+    guardrails: { hard: { max_iterations: 30 }, soft: [], human_checkpoint_every: 3 },
+    blackboard_schema: { fields: [{ key: "summary", desc: "滚动摘要", bounded: true }] },
+    entry_node: "write_chapter",
+    completion_criteria: ["写到20章"],
+    policies: { long_running: { idle_watchdog: "30m", max_wall: "4h" }, on_failure: "stop_and_report" },
+  };
 }
 
-test("composeSolutionWorkflow uses LLM to generate a workflow", async () => {
-  const root = await mkdtemp(join(tmpdir(), "verana-compose-llm-"));
-  const project = await createProject(root, "调研海外红人监控系统");
-  const client = buildFakeClient();
-
-  const workflow = await composeSolutionWorkflow(root, project.id, client);
-
-  assert.equal(workflow.phase, "solution");
-  assert.equal(workflow.selected_executor, "hermes");
-  assert.equal(workflow.tasks.length, 3);
-  assert.equal(workflow.tasks[0]?.id, "t1");
-  assert.equal(workflow.tasks[1]?.depends_on?.[0], "t1");
-
-  const loaded = await getProject(root, project.id);
-  assert.equal(loaded.project.status, "solutioning");
-  assert.equal(loaded.status.workflows.solution?.status, "plan_review");
-
-  const workflowYaml = parse(await readFile(join(root, "projects", project.id, "solution", "workflow.yaml"), "utf8"));
-  assert.equal(workflowYaml.tasks.length, 3);
+test("composeGraphWorkflow writes workflow.yaml + sets plan_review", async () => {
+  await rm(TMP, { recursive: true, force: true });
+  await mkdir(TMP, { recursive: true });
+  const p = await createProject(TMP, "写小说", "小说");
+  const spec = makeSpec(p.id);
+  await composeGraphWorkflow(TMP, p.id, fakeClient, spec);
+  const state = await getProject(TMP, p.id);
+  assert.equal(state.status.workflows.solution?.workflow_status, "plan_review");
+  assert.equal(state.status.flow_type, "graph");
+  // workflow.yaml 存在
+  const raw = await readFile(join(projectPath(TMP, p.id), "solution", "workflow.yaml"), "utf8");
+  const parsed = parse(raw) as GraphWorkflowSpec;
+  assert.equal(parsed.capabilities.length, 2);
 });
 
-test("runProject executes LLM-composed DAG and verifies with LLM evaluator", async () => {
-  const root = await mkdtemp(join(tmpdir(), "verana-run-llm-"));
-  const project = await createProject(root, "调研海外红人监控系统");
-  const client = buildFakeClient();
-  await composeSolutionWorkflow(root, project.id, client);
-  await approveGate(root, project.id, "plan_review", "通过");
-
-  await runProject(root, project.id, client);
-
-  const loaded = await getProject(root, project.id);
-  const workflow = loaded.status.workflows.solution;
-  assert.equal(workflow?.status, "final_review");
-  assert.equal(workflow?.tasks.t1?.status, "delivered");
-  assert.equal(workflow?.tasks.t2?.status, "delivered");
-
-  const findings = await readFile(join(root, "projects", project.id, "solution", "research", "findings.md"), "utf8");
-  assert.match(findings, /交付内容/);
-
-  const verdict = parse(await readFile(join(root, "projects", project.id, "runs", "run-0001", "verdict.yaml"), "utf8"));
-  assert.equal(verdict.passed, true);
-});
+function projectPath(root: string, id: string) { return join(root, "projects", id); }

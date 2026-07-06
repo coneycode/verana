@@ -5,7 +5,6 @@ import { parse } from "yaml";
 import { appendClarification, buildGoalSummary, nextClarificationQuestion } from "./clarifier.js";
 import { HttpLlmClient, loadConfig, type LlmClient } from "./llm.js";
 import { approveGate, createProject, getProject, listProjects, projectPath, rejectGate, saveProjectState } from "./project-store.js";
-import { composeSolutionWorkflow, runProject } from "./pipeline.js";
 
 export type Output = (line: string) => void;
 
@@ -31,14 +30,6 @@ export async function runCli(argv: string[], output: Output = console.log, clien
   const projectId = args[0];
   if (!projectId) throw new Error(`Usage: verana ${command} <project-id>`);
 
-  if (command === "plan") {
-    const workflow = await composeSolutionWorkflow(root, projectId, llm);
-    output(`${workflow.phase}: plan_review`);
-    output(`executor: ${workflow.selected_executor}`);
-    output(`tasks: ${workflow.tasks.map((task) => task.id).join(",")}`);
-    return;
-  }
-
   if (command === "approve") {
     const gateId = args[1];
     if (!gateId) throw new Error("Usage: verana approve <project-id> <gate-id>");
@@ -56,9 +47,12 @@ export async function runCli(argv: string[], output: Output = console.log, clien
   }
 
   if (command === "run") {
-    await runProject(root, projectId, llm);
+    const { runGraphProject } = await import("./graph-engine.js");
+    await runGraphProject(root, projectId, llm);
     const state = await getProject(root, projectId);
-    output(`${state.status.active_workflow}: ${state.status.workflows.solution?.status ?? "unknown"}`);
+    const wf = state.status.workflows.solution;
+    output(`${state.status.active_workflow}: ${wf?.workflow_status ?? "unknown"}`);
+    if (wf?.awaiting === "human") output(`awaiting_human: ${wf.awaiting_scene} — ${wf.awaiting_reason}`);
     return;
   }
 
@@ -66,15 +60,18 @@ export async function runCli(argv: string[], output: Output = console.log, clien
     const state = await getProject(root, projectId);
     output(`${state.project.id}: ${state.project.status}`);
     const solution = state.status.workflows.solution;
-    if (solution) output(`solution: ${solution.status}`);
-    if (state.status.awaiting_input) output(`awaiting_input: ${state.status.awaiting_input}`);
+    if (solution) {
+      output(`solution: ${solution.workflow_status}`);
+      output(`iteration: ${solution.iteration}, current_node: ${solution.current_node ?? "-"}`);
+      if (solution.awaiting === "human") output(`awaiting_human: ${solution.awaiting_scene} — ${solution.awaiting_reason}`);
+    }
     return;
   }
 
   if (command === "logs") {
     const runId = args[1];
     if (!runId) throw new Error("Usage: verana logs <project-id> <run-id>");
-    const verdict = parse(await readFile(join(projectPath(root, projectId), "runs", runId, "verdict.yaml"), "utf8"));
+    const verdict = parse(await readFile(join(projectPath(root, projectId), "runs", runId, "verdict.yaml"), "utf8").catch(() => "passed: false"));
     output(`verdict: ${verdict.passed ? "passed" : "failed"}`);
     return;
   }
@@ -90,49 +87,42 @@ export async function runCli(argv: string[], output: Output = console.log, clien
     return;
   }
 
-  if (command === "cancel") {
-    const state = await getProject(root, projectId);
-    state.project.status = "cancelled";
-    await saveProjectState(root, state);
-    output(`cancelled ${projectId}`);
-    return;
-  }
-
   if (command === "clarify") {
     const state = await getProject(root, projectId);
-    const question = await nextClarificationQuestion(state, llm);
-    if (!question) {
-      output(buildGoalSummary(state));
-      return;
+    if (state.status.clarifier?.current_question) {
+      output(state.status.clarifier.current_question.question);
+      output(`[risk] ${state.status.clarifier.current_question.risk}`);
+    } else {
+      output("no active question (goal may be ready)");
     }
-    output(`question: ${question.question}`);
-    output(`risk: ${question.risk}`);
     return;
   }
 
-  throw new Error(`Unknown command: ${command}`);
+  if (command === "cancel") {
+    await rejectGate(root, projectId, "cancel", "user cancelled");
+    output("cancelled");
+    return;
+  }
+
+  output(`unknown command: ${command}`);
+  output(USAGE);
 }
 
+const USAGE = `verana new|list|clarify|status|approve|reject|run|logs|input|cancel`;
+
 function parseArgs(argv: string[]): { command: string; args: string[]; root: string } {
-  const root = resolve(optionValue(argv, "--root") ?? process.cwd());
-  const filtered = argv.filter((arg, index) => {
-    if (arg === "--root" || arg === "--note") return false;
-    if (argv[index - 1] === "--root" || argv[index - 1] === "--note") return false;
-    return true;
-  });
-  const [command = "", ...args] = filtered;
+  const rootIdx = argv.indexOf("--root");
+  const root = resolve(rootIdx >= 0 ? argv[rootIdx + 1] ?? "." : ".");
+  // 兼容有/无 node 前缀:跳过前两个非 flag 参数(可能是 node + script),取第一个作为 command
+  const cleaned = argv.filter((a) => a !== "--root" && a !== (rootIdx >= 0 ? argv[rootIdx + 1] : "__none__"));
+  const startIdx = cleaned[0] === process.argv[0] || cleaned[0]?.endsWith("node") || cleaned[0]?.endsWith(".js") ? 1 : 0;
+  const realArgs = cleaned.slice(startIdx).filter((a) => !a.startsWith("--"));
+  const command = realArgs[0] ?? "";
+  const args = realArgs.slice(1);
   return { command, args, root };
 }
 
-function optionValue(argv: string[], name: string): string | undefined {
-  const index = argv.indexOf(name);
-  if (index === -1) return undefined;
-  return argv[index + 1];
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  runCli(process.argv.slice(2)).catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
+function optionValue(argv: string[], flag: string): string | undefined {
+  const idx = argv.indexOf(flag);
+  return idx >= 0 ? argv[idx + 1] : undefined;
 }
