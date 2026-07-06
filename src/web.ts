@@ -214,7 +214,7 @@ function getPhase() {
   if (clarifier && !state.status.workflows.solution) return 'clarifying';
   const wf = state.status.workflows.solution;
   if (!wf) return state.project.status;
-  return wf.status;
+  return wf.workflow_status;
 }
 
 function render() {
@@ -263,30 +263,46 @@ function renderMain() {
     return;
   }
 
-  // --- Plan review ---
+  // --- Plan review (图模型:展示能力清单+护栏+blackboard schema) ---
   if (phase === 'plan_review') {
-    el.innerHTML = '<div class="guide"><div class="guide-title">审核任务拆解</div><div class="guide-desc">系统已生成方案 workflow,包含任务 DAG。请审核以下任务拆解,确认合理后通过。</div><div class="row"><button class="good" id="approvePlanBtn">通过,开始执行</button><button class="bad" id="showRejectPlanBtn">打回重做</button></div><div id="rejectPlanPanel" style="display:none;margin-top:8px"><textarea id="rejectPlanNote" placeholder="具体打回要求:哪些 task 拆得不对、缺什么、要怎么调整"></textarea><button class="bad" id="rejectPlanBtn" style="margin-top:6px">确认打回</button></div></div>'+
-      '<div id="taskCards"></div>';
+    el.innerHTML = '<div class="guide"><div class="guide-title">审核能力与护栏</div><div class="guide-desc">系统已规划图工作流。预定义的是能力清单(节点)+护栏+记忆结构,执行路径由调度大脑运行时动态决定。请审核后通过。</div><div class="row"><button class="good" id="approvePlanBtn">通过,开始执行</button><button class="bad" id="showRejectPlanBtn">打回重规划</button></div><div id="rejectPlanPanel" style="display:none;margin-top:8px"><textarea id="rejectPlanNote" placeholder="具体打回要求:哪些能力缺失/多余、护栏不合理、记忆结构有问题"></textarea><button class="bad" id="rejectPlanBtn" style="margin-top:6px">确认打回</button></div></div>'+
+      '<div id="planOverview"></div>';
     $('approvePlanBtn').onclick = () => doApprove('plan_review');
     $('showRejectPlanBtn').onclick = () => { $('rejectPlanPanel').style.display='block'; $('rejectPlanNote').focus(); };
     $('rejectPlanBtn').onclick = () => doReject('plan_review');
-    renderTaskCards('taskCards', false);
+    renderPlanOverview('planOverview');
     return;
   }
 
-  // --- Executing ---
+  // --- Executing (图模型:轮次时间线 + blackboard 面板 + 当前节点输出) ---
   if (phase === 'executing') {
-    const tasks = state.status.workflows.solution?.tasks || {};
-    const taskList = workflowSpec?.tasks || Object.values(tasks);
-    // Find active/running task
-    const runningTask = Object.values(tasks).find(t => t.status === 'running' || t.status === 'verifying');
-    if (runningTask && !selectedTaskId) selectedTaskId = runningTask.id;
-
-    el.innerHTML = '<div class="guide"><div class="guide-title">执行中</div><div class="guide-desc">系统正在按 DAG 逐个执行 task,每个 task 完成后独立验证。右侧实时显示当前 task 的 LLM 输出。</div><div class="row"><button class="secondary" id="runContinueBtn">继续执行</button></div></div>'+
-      '<div class="exec-layout"><div class="exec-left" id="execTaskList"></div><div class="exec-right" id="execStreamArea"></div></div>';
+    const wf = state.status.workflows.solution;
+    const iter = wf?.iteration ?? 0;
+    const curNode = wf?.current_node ?? '-';
+    el.innerHTML = '<div class="guide"><div class="guide-title">执行中(图引擎)</div><div class="guide-desc">调度大脑每步从能力清单选节点执行,带理由留痕。轮次: '+iter+' | 当前节点: '+escapeHtml(curNode)+'</div><div class="row"><button class="secondary" id="runContinueBtn">继续/刷新</button></div></div>'+
+      '<div class="exec-layout"><div class="exec-left" id="execTimeline"></div><div class="exec-right" id="execStreamArea"></div></div>'+
+      '<div id="blackboardPanel" style="margin-top:12px"></div>';
     $('runContinueBtn').onclick = () => doRun();
-    renderExecTaskList('execTaskList');
+    renderTimeline('execTimeline');
     renderExecStream('execStreamArea');
+    renderBlackboard('blackboardPanel');
+    return;
+  }
+
+  // --- Awaiting human (图模型:四场景人审卡) ---
+  if (phase === 'awaiting_human') {
+    const wf = state.status.workflows.solution;
+    const scene = wf?.awaiting_scene ?? 'checkpoint';
+    const reason = wf?.awaiting_reason ?? '需要人审';
+    const sceneLabels = { failure: '失败/异常', guardrail: '碰护栏', capability_gap: '能力缺口', checkpoint: '阶段检查点', anomaly: '状态异常' };
+    el.innerHTML = '<div class="guide"><div class="guide-title" style="color:var(--warn)">需要人审: '+escapeHtml(sceneLabels[scene] || scene)+'</div><div class="guide-desc">'+escapeHtml(reason)+'</div>'+
+      '<div class="row"><button class="good" id="humanContinueBtn">继续执行</button><button class="bad" id="humanAbortBtn">放弃</button></div>'+
+      '<div style="margin-top:10px"><div class="muted" style="margin-bottom:4px">给调度大脑的方向指令(可选,持续影响后续调度):</div><textarea id="humanDirection" placeholder="例如:接下来往悬疑方向收紧,或者:第3章节奏太慢要加快"></textarea></div>'+
+      '<div style="margin-top:8px"><div class="muted" style="margin-bottom:4px">手动编辑 blackboard(可选,JSON 格式):</div><textarea id="humanBbEdit" placeholder="例如: {\"summary\":\"修改后的摘要\"}" style="min-height:50px"></textarea></div>'+
+      '</div><div id="blackboardPanel"></div>';
+    $('humanContinueBtn').onclick = () => doHumanVerdict('continue');
+    $('humanAbortBtn').onclick = () => doHumanVerdict('abort');
+    renderBlackboard('blackboardPanel');
     return;
   }
 
@@ -319,64 +335,108 @@ function renderMain() {
   el.innerHTML = '<div class="guide"><div class="guide-desc muted">未知状态: '+escapeHtml(String(phase))+'</div></div>';
 }
 
-function renderTaskCards(containerId, canRerun) {
+function renderPlanOverview(containerId) {
   const el = $(containerId);
   if (!el) return;
-  const tasks = state.status.workflows.solution?.tasks || {};
-  if (!workflowSpec?.tasks?.length) { el.innerHTML = '<div class="muted">暂无 task。</div>'; return; }
-  el.innerHTML = workflowSpec.tasks.map(task => {
-    const rt = tasks[task.id];
-    const status = rt?.status || 'pending';
-    const cls = status === 'delivered' ? 'ok' : (status === 'failed' ? 'warn' : (status === 'running' ? 'run' : ''));
-    const outputs = (task.outputs||[]).map(o => '<div class="task-meta">产出: '+escapeHtml(o.path)+' — '+escapeHtml(o.desc)+'</div>').join('');
-    const checks = (task.checks||[]).map(c => '<div class="task-meta">验收: ['+escapeHtml(c.method)+'] '+escapeHtml(c.desc)+'</div>').join('');
-    const deps = (task.depends_on||[]).length ? '<div class="task-meta">依赖: '+escapeHtml((task.depends_on||[]).join(', '))+'</div>' : '';
-    return '<div class="task-card"><div class="task-row"><b>'+escapeHtml(task.id)+' — '+escapeHtml(task.agent)+'</b><span class="pill '+cls+'">'+escapeHtml(status)+'</span></div><div class="task-desc">'+escapeHtml(task.desc)+'</div>'+outputs+checks+deps+'</div>';
-  }).join('');
+  const spec = workflowSpec;
+  if (!spec || !spec.capabilities) { el.innerHTML = '<div class="muted">暂无 workflow 规划。</div>'; return; }
+  let html = '<div class="section-title">能力清单 ('+spec.capabilities.length+' 个节点)</div><div class="body">';
+  for (const cap of spec.capabilities) {
+    const kindCls = cap.kind === 'agent' ? 'run' : 'ok';
+    const outputs = (cap.outputs||[]).map(o => '<div class="task-meta">产出: '+escapeHtml(o.path)+' — '+escapeHtml(o.desc)+'</div>').join('');
+    const checks = (cap.checks||[]).map(c => '<div class="task-meta">验收: ['+escapeHtml(c.method)+'] '+escapeHtml(c.desc)+'</div>').join('');
+    const updates = cap.updates?.length ? '<div class="task-meta">更新记忆: '+escapeHtml(cap.updates.join(', '))+'</div>' : '';
+    html += '<div class="task-card"><div class="task-row"><b>'+escapeHtml(cap.id)+'</b><span class="pill '+kindCls+'">'+escapeHtml(cap.kind)+'</span></div><div class="task-desc">'+escapeHtml(cap.desc)+'</div>'+outputs+checks+updates+'</div>';
+  }
+  html += '</div>';
+  // 护栏
+  html += '<div class="section-title" style="margin-top:12px">护栏</div><div class="body">';
+  html += '<div class="task-meta">硬上限: max_iterations='+escapeHtml(String(spec.guardrails?.hard?.max_iterations ?? '-'))+(spec.guardrails?.hard?.max_retries_per_node? ' / max_retries='+escapeHtml(String(spec.guardrails.hard.max_retries_per_node)):'')+'</div>';
+  if (spec.guardrails?.soft?.length) {
+    for (const s of spec.guardrails.soft) html += '<div class="task-meta">软红线: '+escapeHtml(s.id)+' — '+escapeHtml(s.desc)+' ['+escapeHtml(s.action)+']</div>';
+  }
+  if (spec.guardrails?.human_checkpoint_every) html += '<div class="task-meta">阶段人审: 每 '+escapeHtml(String(spec.guardrails.human_checkpoint_every))+' 轮</div>';
+  html += '</div>';
+  // blackboard schema
+  html += '<div class="section-title" style="margin-top:12px">Blackboard 记忆结构</div><div class="body">';
+  for (const f of spec.blackboard_schema?.fields ?? []) {
+    html += '<div class="task-meta">'+escapeHtml(f.key)+(f.bounded?' (有界,需压缩)':'')+' — '+escapeHtml(f.desc)+'</div>';
+  }
+  html += '</div>';
+  // 完成标准
+  html += '<div class="section-title" style="margin-top:12px">完成标准</div><div class="body">';
+  for (const c of spec.completion_criteria ?? []) html += '<div class="task-meta">- '+escapeHtml(c)+'</div>';
+  html += '</div>';
+  el.innerHTML = html;
 }
 
-function renderExecTaskList(containerId) {
+function renderTimeline(containerId) {
   const el = $(containerId);
   if (!el) return;
-  const tasks = state.status.workflows.solution?.tasks || {};
-  const specTasks = workflowSpec?.tasks || Object.values(tasks);
-  if (!specTasks.length) { el.innerHTML = '<div class="muted">暂无 task。</div>'; return; }
-  el.innerHTML = specTasks.map(task => {
-    const rt = tasks[task.id] || { status: 'pending' };
-    const status = rt.status;
-    const cls = status === 'delivered' ? 'ok' : (status === 'failed' ? 'warn' : (status === 'running' || status === 'verifying' ? 'run' : ''));
-    const selected = task.id === selectedTaskId ? 'selected' : '';
-    const runs = (rt.runs || []).map(r => '<button class="secondary run-log" data-run="'+escapeHtml(r)+'" data-task="'+escapeHtml(task.id)+'" style="padding:1px 6px;font-size:10px;margin:1px">'+escapeHtml(r)+'</button>').join(' ');
-    const rerunBtn = status !== 'running' ? '<button class="secondary rerun-btn" data-task="'+escapeHtml(task.id)+'" style="padding:2px 8px;font-size:11px;margin-top:4px">重跑</button>' : '';
-    return '<div class="task-card '+selected+'" data-task="'+escapeHtml(task.id)+'"><div class="task-row"><b>'+escapeHtml(task.id)+'</b><span class="pill '+cls+'">'+escapeHtml(status)+'</span></div>'+(runs?'<div style="margin-top:3px">'+runs+'</div>':'')+rerunBtn+'</div>';
-  }).join('');
-  // Bind click to select task
-  el.querySelectorAll('.task-card[data-task]').forEach(card => card.addEventListener('click', (e) => {
-    if (e.target.tagName === 'BUTTON') return;
-    selectedTaskId = card.dataset.task;
+  const wf = state.status.workflows.solution;
+  if (!wf) { el.innerHTML = '<div class="muted">无 workflow。</div>'; return; }
+  const runs = wf.runs || {};
+  const allRunIds = Object.values(runs).flat();
+  if (!allRunIds.length) { el.innerHTML = '<div class="muted">暂无 run(等待调度大脑第一步决策)。</div>'; return; }
+  // 按 run 顺序展示(轮次时间线)
+  let html = '';
+  for (const [nodeId, nodeRuns] of Object.entries(runs)) {
+    const spec = workflowSpec?.capabilities?.find(c => c.id === nodeId);
+    const kindCls = spec?.kind === 'agent' ? 'run' : 'ok';
+    for (const runId of nodeRuns) {
+      const selected = runId === activeRunId ? 'selected' : '';
+      html += '<div class="task-card '+selected+'" data-run="'+escapeHtml(runId)+'"><div class="task-row"><b>'+escapeHtml(nodeId)+'</b><span class="pill '+kindCls+'">'+escapeHtml(spec?.kind || '?')+'</span></div><div class="task-meta">'+escapeHtml(runId)+'</div></div>';
+    }
+  }
+  el.innerHTML = html;
+  el.querySelectorAll('.task-card[data-run]').forEach(card => card.addEventListener('click', () => {
+    activeRunId = card.dataset.run;
     streamContent = '';
-    renderExecTaskList(containerId);
+    renderTimeline(containerId);
     renderExecStream('execStreamArea');
+    loadRunLog(activeRunId);
   }));
-  el.querySelectorAll('.run-log').forEach(btn => btn.addEventListener('click', (e) => { e.stopPropagation(); selectedTaskId = btn.dataset.task; streamContent=''; loadRunLog(btn.dataset.run); }));
-  el.querySelectorAll('.rerun-btn').forEach(btn => btn.addEventListener('click', (e) => { e.stopPropagation(); doRerun(btn.dataset.task); }));
+}
+
+function renderBlackboard(containerId) {
+  const el = $(containerId);
+  if (!el) return;
+  const wf = state.status.workflows.solution;
+  const bb = wf?.blackboard || {};
+  const schema = workflowSpec?.blackboard_schema;
+  const keys = Object.keys(bb);
+  if (!keys.length) { el.innerHTML = '<div class="section-title">Blackboard</div><div class="muted" style="padding:8px">暂无记忆(初始状态)。</div>'; return; }
+  let html = '<div class="section-title">Blackboard (跨轮记忆)</div><div class="body" style="max-height:300px;overflow:auto">';
+  for (const [k, v] of Object.entries(bb)) {
+    const desc = schema?.fields?.find(f => f.key === k)?.desc || '';
+    const valStr = typeof v === 'string' ? v : JSON.stringify(v);
+    const preview = valStr.length > 200 ? valStr.slice(0, 200) + '...' : valStr;
+    html += '<div class="qa-item"><div class="qa-q">'+escapeHtml(k)+(desc?' <span class="muted">— '+escapeHtml(desc)+'</span>':'')+'</div><div class="qa-a" style="white-space:pre-wrap">'+escapeHtml(preview)+'</div></div>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
 }
 
 function renderExecStream(containerId) {
   const el = $(containerId);
   if (!el) return;
-  const tasks = state.status.workflows.solution?.tasks || {};
-  const task = selectedTaskId ? tasks[selectedTaskId] : null;
-  const taskSpec = workflowSpec?.tasks?.find(t => t.id === selectedTaskId);
-  let title = selectedTaskId ? selectedTaskId : '未选择 task';
-  if (taskSpec) title += ' — ' + taskSpec.agent;
-  let statusText = task ? task.status : 'pending';
-  // Find latest run for this task
-  const runs = task?.runs || [];
-  const latestRun = runs.length ? runs[runs.length - 1] : null;
-  if (latestRun && !activeRunId) activeRunId = latestRun;
+  const wf = state.status.workflows.solution;
+  const curNode = wf?.current_node;
+  const iter = wf?.iteration ?? 0;
+  const spec = workflowSpec?.capabilities?.find(c => c.id === (activeRunId ? guessNodeIdFromRun(activeRunId) : curNode));
+  let title = curNode || '未选择';
+  if (spec) title += ' [' + spec.kind + ']';
+  let statusText = 'iteration ' + iter;
+  if (activeRunId) statusText += ' | ' + activeRunId;
+  el.innerHTML = '<div class="stream-status">节点: '+escapeHtml(title)+' | '+escapeHtml(statusText)+'</div><div class="stream-box" id="streamBox">'+(streamContent ? markdownToHtml(streamContent) : escapeHtml(activeRunId ? '点击 run 查看输出,或等待 LLM 实时输出...' : '暂无 run 记录,等待调度大脑决策...'))+'</div>';
+}
 
-  el.innerHTML = '<div class="stream-status">Task: '+escapeHtml(title)+' | 状态: '+escapeHtml(statusText)+(latestRun?' | Run: '+escapeHtml(latestRun):'')+'</div><div class="stream-box" id="streamBox">'+(streamContent ? markdownToHtml(streamContent) : escapeHtml(latestRun ? '点击 task 查看输出,或等待 LLM 实时输出...' : '暂无 run 记录。'))+'</div>';
+function guessNodeIdFromRun(runId) {
+  const runs = state?.status?.workflows?.solution?.runs || {};
+  for (const [nodeId, nodeRuns] of Object.entries(runs)) {
+    if (nodeRuns.includes(runId)) return nodeId;
+  }
+  return null;
 }
 
 async function loadRunLog(runId) {
@@ -393,8 +453,8 @@ async function loadRunLog(runId) {
 
 async function loadActiveStream() {
   if (!activeRunId) {
-    const tasks = state?.status?.workflows?.solution?.tasks || {};
-    const allRuns = Object.values(tasks).flatMap(t => t.runs || []);
+    const runs = state?.status?.workflows?.solution?.runs || {};
+    const allRuns = Object.values(runs).flat();
     if (allRuns.length) activeRunId = allRuns[allRuns.length - 1];
   }
   if (!activeRunId) { streamContent = '暂无正在执行的 run。'; renderExecStream('execStreamArea'); return; }
@@ -443,7 +503,7 @@ async function doAnswer() {
 
 async function doPlan() {
   setBusy(true);
-  try { await post('/projects/'+selectedId+'/plan'); await refresh(); }
+  try { await post('/projects/'+selectedId+'/plan', {}); await refresh(); }
   catch(e) { alert(e.message); }
   setBusy(false);
 }
@@ -474,15 +534,21 @@ async function doRun() {
   } catch(e) { alert(e.message); setBusy(false); }
 }
 
-async function doRerun(taskId) {
+async function doHumanVerdict(action) {
   setBusy(true);
   try {
-    selectedTaskId = taskId;
-    streamContent = '';
-    await post('/projects/'+selectedId+'/rerun/'+taskId);
-    setBusy(false);
+    const body = { action };
+    const dirEl = $('humanDirection');
+    if (dirEl && dirEl.value.trim()) body.direction_hint = dirEl.value.trim();
+    const bbEl = $('humanBbEdit');
+    if (bbEl && bbEl.value.trim()) {
+      try { body.blackboard_edits = JSON.parse(bbEl.value.trim()); }
+      catch(e) { alert('blackboard 编辑不是合法 JSON: ' + e.message); setBusy(false); return; }
+    }
+    await post('/projects/'+selectedId+'/human-verdict', body);
     await refresh();
-  } catch(e) { alert(e.message); setBusy(false); }
+  } catch(e) { alert(e.message); }
+  setBusy(false);
 }
 
 function doExportMd() {
@@ -510,28 +576,26 @@ function connectEvents() {
   $('connection').textContent = 'SSE: connecting';
   source.onopen = () => $('connection').textContent = 'SSE: connected';
   source.onerror = () => $('connection').textContent = 'SSE: disconnected';
-  ['snapshot','project_created','plan_composed','gate_approved','gate_rejected','run_completed','run_failed','input_recorded','task_updated','status_changed'].forEach(type => source.addEventListener(type, () => { refresh(); }));
+  ['snapshot','project_created','plan_composed','gate_approved','gate_rejected','run_completed','run_failed','input_recorded','status_changed','node_selected','blackboard_updated','human_required','human_verdict','verdict'].forEach(type => source.addEventListener(type, () => { refresh(); }));
   source.addEventListener('llm_stream', (event) => {
     const data = JSON.parse(event.data);
     const payload = data.payload || {};
     if (payload.runId) activeRunId = payload.runId;
-    if (payload.taskId) selectedTaskId = payload.taskId;
-    // Auto-load stream on first event or when content arrives
+    if (payload.nodeId) { /* 当前节点通过 state 获取 */ }
     if (payload.content) {
       streamContent = payload.content;
     } else if (payload.message) {
       streamContent = payload.message;
     }
-    // Update stream box if in executing phase
     const box = $('streamBox');
     if (box) {
       box.innerHTML = streamContent ? markdownToHtml(streamContent) : escapeHtml('等待 LLM 响应...');
     }
-    // Also refresh task list to show status changes
     const phase = getPhase();
     if (phase === 'executing') {
-      renderExecTaskList('execTaskList');
+      renderTimeline('execTimeline');
       renderExecStream('execStreamArea');
+      renderBlackboard('blackboardPanel');
     }
   });
 }
