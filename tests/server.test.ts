@@ -43,6 +43,11 @@ test("Server: create → plan(spec) → approve → run → final_review", async
     assert.equal(planResponse.statusCode, 200);
     assert.equal(planResponse.json().flow_type, "graph");
 
+    // 测自动规划路径(不传 spec,Composer 生成)
+    const autoPlanResponse = await app.inject({ method: "POST", url: `/projects/${pid}/plan` });
+    assert.equal(autoPlanResponse.statusCode, 200);
+    assert.ok(autoPlanResponse.json().capabilities.length > 0);
+
     const approvePlan = await app.inject({ method: "POST", url: `/projects/${pid}/approve`, payload: { gate: "plan_review", note: "ok" } });
     assert.equal(approvePlan.statusCode, 200);
     assert.equal(approvePlan.json().status.workflows.solution.workflow_status, "executing");

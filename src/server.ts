@@ -8,7 +8,7 @@ import { appendClarification, buildGoalSummary, nextClarificationQuestion } from
 import { EventBus, projectEvent } from "./events.js";
 import { HttpLlmClient, loadConfig, type LlmClient } from "./llm.js";
 import { approveGate, deleteProject, getProject, listProjects, projectPath, rejectGate, saveProjectState } from "./project-store.js";
-import { composeGraphWorkflow } from "./pipeline.js";
+import { composeGraphWorkflow, planGraphWorkflow } from "./pipeline.js";
 import { runGraphProject, applyHumanVerdict } from "./graph-engine.js";
 import { renderHomePage } from "./web.js";
 import type { GraphWorkflowSpec } from "./types.js";
@@ -91,8 +91,14 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
 
   app.post<{ Params: { id: string } }>("/projects/:id/plan", async (request) => {
     const body = (request.body as { spec?: GraphWorkflowSpec }) ?? {};
-    if (!body.spec) throw new Error("plan body must include spec");
-    const workflow = await composeGraphWorkflow(options.rootDir, request.params.id, client, body.spec);
+    let workflow: GraphWorkflowSpec;
+    if (body.spec) {
+      // 手写 spec 模式(测试/调试用)
+      workflow = await composeGraphWorkflow(options.rootDir, request.params.id, client, body.spec);
+    } else {
+      // Composer 自动规划模式(从目标 + 澄清生成能力+护栏+schema)
+      workflow = await planGraphWorkflow(options.rootDir, request.params.id, client);
+    }
     bus.publish(projectEvent("plan_composed", request.params.id));
     return workflow;
   });

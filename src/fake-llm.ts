@@ -36,6 +36,7 @@ export function fakeExecutorContent() {
 /**
  * buildSmartFakeClient — 支持图工作流引擎的各类 LLM 响应:
  * - clarifier(澄清问题)
+ * - composer 规划(生成能力+护栏+schema)
  * - scheduler(调度大脑:选节点+理由)
  * - executor(节点执行:产出内容)
  * - cross_check(轻节点交叉验证)
@@ -44,24 +45,28 @@ export function fakeExecutorContent() {
  * - blackboard_update(记忆更新)
  */
 export function buildSmartFakeClient(): FakeLlmClient {
-  let callCount = 0;
+  let schedCount = 0;
   return new FakeLlmClient((role, system, user) => {
     // Clarifier
     if (role === "composer" && system.includes("方案澄清助手")) return { json: fakeClarifierQuestion() };
 
+    // Composer 规划(生成图工作流 spec)
+    if (role === "composer" && system.includes("workflow 规划者")) {
+      return { json: fakeComposerGraphSpec(user) };
+    }
+
+    // Capability gap review(执行中能力缺口复核)
+    if (role === "composer" && system.includes("workflow 规划者(Composer)。调度大脑报告了")) {
+      return { json: { reasonable: false, reason: "测试:不需要新能力" } };
+    }
+
     // Scheduler(调度大脑)
     if (role === "composer" && system.includes("调度大脑")) {
-      // 第一次选入口节点,之后判断完成
-      callCount++;
-      if (callCount <= 2) {
+      schedCount++;
+      if (schedCount <= 2) {
         return { json: { next_node: "write_chapter", reason: "继续写下一章", capability_gap: "", is_complete: false } };
       }
       return { json: { next_node: "", reason: "已写到目标章数", capability_gap: "", is_complete: true } };
-    }
-
-    // Capability gap review
-    if (role === "composer" && system.includes("workflow 规划者")) {
-      return { json: { reasonable: false, reason: "测试:不需要新能力" } };
     }
 
     // Cross check(轻节点交叉验证)
@@ -90,4 +95,29 @@ export function buildSmartFakeClient(): FakeLlmClient {
     // Fallback
     return { json: { passed: true, reasons: ["ok"], evidence: [] } };
   });
+}
+
+function fakeComposerGraphSpec(userPrompt: string): unknown {
+  // 从 user prompt 提取 project_id(目标里没有,用固定结构)
+  return {
+    clarified: "写一部悬疑小说,约2章",
+    deliverable_type: "creative",
+    iterative: true,
+    acceptance: ["每章3000字以上", "情节连贯"],
+    capabilities: [
+      {
+        id: "write_chapter", kind: "agent", agent: "writer",
+        desc: "根据大纲和已写内容写下一章",
+        outputs: [{ path: "solution/chapters/", desc: "章节文件" }],
+        checks: [{ method: "llm_rubric", desc: ">=3000字,情节连贯" }],
+        updates: ["summary"],
+      },
+    ],
+    guardrails: { max_iterations: 5, soft: [], human_checkpoint_every: 0 },
+    blackboard_schema: { fields: [{ key: "summary", desc: "滚动摘要", bounded: true }] },
+    entry_node: "write_chapter",
+    completion_criteria: ["写到2章"],
+    agents: ["writer"],
+    required_capabilities: ["web", "long_running"],
+  };
 }

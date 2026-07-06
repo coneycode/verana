@@ -3,17 +3,168 @@ import { join } from "node:path";
 
 import type { LlmClient } from "./llm.js";
 import { getProject, projectPath, saveProjectState, writeYaml } from "./project-store.js";
-import type { GraphWorkflowSpec, GraphRuntime } from "./types.js";
+import type { CapabilityNode, GraphWorkflowSpec, GraphRuntime } from "./types.js";
 import { validateGraphWorkflow } from "./workflow-validator.js";
 
 // 重导出图执行引擎
 export { runGraphProject, readGraphSpec, applyHumanVerdict } from "./graph-engine.js";
 
-/**
- * [TEMP] composeGraphWorkflow — 临时占位。
- * 后续完整实现:Composer 规划(判断任务性质 → 列能力清单 → 定护栏 → 设计 blackboard schema)
- * 目前:手写样例 workflow.yaml 验证执行引擎。真正调用此函数时走 LLM 规划(待实现)。
- */
+const COMPOSER_SYSTEM = `你是一个 workflow 规划者(Composer)。你的职责是把用户目标编译成一套可执行的图工作流规格。
+
+图工作流模型(不是静态 DAG):
+- 能力清单(capabilities):这个任务需要哪些功能节点,每个节点做什么、轻还是重、怎么验证
+- 护栏(guardrails):什么情况必须停下问人(硬上限 + 软红线)
+- blackboard schema:这个任务要记住什么(跨轮记忆,由更新节点压缩维护)
+- 调度大脑会在执行中动态决定下一步调哪个节点,你不需要预先画完整图
+
+你必须返回 JSON,结构如下:
+{
+  "clarified": "澄清后的目标描述",
+  "deliverable_type": "research | creative | implementation",
+  "iterative": true/false,
+  "acceptance": ["验收标准1", ...],
+  "capabilities": [
+    {
+      "id": "节点id(英文短名)",
+      "kind": "light | agent",
+      "desc": "这个节点做什么的自然语言描述",
+      "agent": "角色名(agent节点必填,如writer/researcher)",
+      "outputs": [{"path": "solution/xxx.md", "desc": "产出说明"}],
+      "checks": [{"method": "llm_rubric | file_exists", "desc": "验收描述", "target": "路径(file_exists时)"}],
+      "updates": ["blackboard字段名(如果这个节点负责更新记忆)"]
+    }
+  ],
+  "guardrails": {
+    "max_iterations": 数字,
+    "soft": [{"id": "红线id", "desc": "红线描述", "action": "stop_human"}],
+    "human_checkpoint_every": 数字(每N轮人审,0=不定期)
+  },
+  "blackboard_schema": {
+    "fields": [{"key": "字段名", "desc": "说明", "bounded": true/false(是否要压缩保持有界)}]
+  },
+  "entry_node": "入口节点id",
+  "completion_criteria": ["完成标准1", ...],
+  "agents": ["角色名列表"],
+  "required_capabilities": ["web", "browser", "long_running"]
+}
+
+规则:
+- 能力清单要覆盖目标的完整交付链(创作型:大纲→写→审→更新记忆→判断;调研型:查→析→审)
+- 轻节点(light):判断/转换/更新记忆,单次调用;重节点(agent):创作/调研/分析,自主完成一件事
+- 每个节点必须有 checks(无验收不执行)
+- bounded 的 blackboard 字段必须有节点负责 updates
+- guardrails.hard.max_iterations 必须有(安全阀)
+- creative/iterative 类任务(写多章/反复打磨)→ iterative=true,能力清单含循环潜力(同一节点可被多次调度)
+- research 类任务(一次性调研)→ iterative=false,能力清单线性
+- entry_node 是调度大脑第一步选的节点(通常是最早的能力)
+- 用中文写 desc
+- required_capabilities 从 [web, browser, long_running] 里选
+- selected_executor 固定 "hermes"
+- skills/scripts 留空数组
+- clarifications 留空数组`;
+
+export async function planGraphWorkflow(
+  rootDir: string,
+  projectId: string,
+  client: LlmClient,
+): Promise<GraphWorkflowSpec> {
+  const state = await getProject(rootDir, projectId);
+  const goal = state.project.goal;
+  const clarifications = state.status.clarifier?.clarifications ?? [];
+
+  const userPrompt = buildComposerPrompt(goal, clarifications);
+  const llmResult = await client.completeJson<ComposerLlmResult>("composer", COMPOSER_SYSTEM, userPrompt);
+
+  const spec = assembleSpec(projectId, goal, llmResult);
+  const validation = validateGraphWorkflow(spec);
+  if (!validation.passed) throw new Error(`Generated workflow failed hard checks: ${validation.errors.join("; ")}`);
+
+  return composeGraphWorkflow(rootDir, projectId, client, spec);
+}
+
+interface ComposerLlmResult {
+  clarified: string;
+  deliverable_type: "research" | "creative" | "implementation";
+  iterative: boolean;
+  acceptance: string[];
+  capabilities: Array<Partial<CapabilityNode> & { id: string }>;
+  guardrails: {
+    max_iterations: number;
+    soft: Array<{ id: string; desc: string; action: string }>;
+    human_checkpoint_every: number;
+  };
+  blackboard_schema: { fields: Array<{ key: string; desc: string; bounded: boolean }> };
+  entry_node: string;
+  completion_criteria: string[];
+  agents: string[];
+  required_capabilities: string[];
+}
+
+function buildComposerPrompt(goal: string, clarifications: Array<{ q: string; a: string; risk: string }>): string {
+  const lines = [`目标: ${goal}`, ""];
+  if (clarifications.length > 0) {
+    lines.push("已澄清信息:");
+    for (const entry of clarifications) {
+      lines.push(`  Q: ${entry.q}`);
+      lines.push(`  A: ${entry.a}`);
+    }
+  }
+  lines.push("");
+  lines.push("请规划图工作流(能力清单 + 护栏 + blackboard schema)。");
+  return lines.join("\n");
+}
+
+function assembleSpec(projectId: string, rawGoal: string, r: ComposerLlmResult): GraphWorkflowSpec {
+  const capabilities: CapabilityNode[] = (r.capabilities ?? []).map((c) => ({
+    id: c.id,
+    kind: c.kind === "agent" ? "agent" : "light",
+    desc: c.desc ?? "",
+    agent: c.agent,
+    skills: c.skills,
+    inputs: c.inputs,
+    outputs: c.outputs,
+    checks: c.checks?.length ? c.checks : [{ method: "llm_rubric", desc: "产出满足要求" }],
+    updates: c.updates,
+  }));
+
+  return {
+    version: "0.2",
+    project_id: projectId,
+    phase: "solution",
+    flow_type: "graph",
+    goal: {
+      raw: rawGoal,
+      clarified: r.clarified || rawGoal,
+      deliverable_type: r.deliverable_type ?? "research",
+      iterative: r.iterative ?? false,
+      acceptance: r.acceptance ?? [],
+    },
+    clarifications: [],
+    required_capabilities: r.required_capabilities ?? ["web", "long_running"],
+    selected_executor: "hermes",
+    agents: r.agents ?? [...new Set(capabilities.filter(c => c.agent).map(c => c.agent!))],
+    skills: [],
+    scripts: [],
+    capabilities,
+    guardrails: {
+      hard: { max_iterations: r.guardrails?.max_iterations ?? 20, max_retries_per_node: 2 },
+      soft: (r.guardrails?.soft ?? []).map(s => ({
+        id: s.id,
+        desc: s.desc,
+        action: s.action === "require_confirm" ? "require_confirm" : "stop_human",
+      })),
+      human_checkpoint_every: r.guardrails?.human_checkpoint_every ?? 0,
+    },
+    blackboard_schema: {
+      fields: r.blackboard_schema?.fields ?? [],
+    },
+    entry_node: r.entry_node ?? capabilities[0]?.id ?? "",
+    completion_criteria: r.completion_criteria ?? [],
+    policies: { long_running: { idle_watchdog: "30m", max_wall: "4h" }, on_failure: "stop_and_report" },
+  };
+}
+
+/** 把已组装的 spec 落盘 + 初始化 GraphRuntime(plan_review)。plan 端点可传 spec 或由 planGraphWorkflow 生成 */
 export async function composeGraphWorkflow(
   rootDir: string,
   projectId: string,
@@ -51,6 +202,3 @@ export async function composeGraphWorkflow(
   await saveProjectState(rootDir, state);
   return spec;
 }
-
-// 旧 composeSolutionWorkflow 已退役 — 现由 composeGraphWorkflow 替代
-// 旧 runProject / rerunTask 已退役 — 现由 graph-engine.runGraphProject 替代

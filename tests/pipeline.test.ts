@@ -6,15 +6,11 @@ import { parse } from "yaml";
 import { createProject, getProject } from "../src/project-store.js";
 import { composeGraphWorkflow } from "../src/pipeline.js";
 import type { GraphWorkflowSpec } from "../src/types.js";
-import type { LlmClient, ModelRole } from "../src/llm.js";
+import { buildSmartFakeClient } from "../src/fake-llm.js";
 
 const TMP = join(process.cwd(), "tmp-test-pipe");
 
-// fake client (composeGraphWorkflow 暂时不调 LLM,但保留接口)
-const fakeClient: LlmClient = {
-  complete: async (_r: ModelRole, _s: string, _u: string) => "",
-  completeJson: async <T,>(_r: ModelRole, _s: string, _u: string): Promise<T> => ({}) as T,
-};
+const fakeClient = buildSmartFakeClient();
 
 function makeSpec(pid: string): GraphWorkflowSpec {
   return {
@@ -47,6 +43,20 @@ test("composeGraphWorkflow writes workflow.yaml + sets plan_review", async () =>
   const raw = await readFile(join(projectPath(TMP, p.id), "solution", "workflow.yaml"), "utf8");
   const parsed = parse(raw) as GraphWorkflowSpec;
   assert.equal(parsed.capabilities.length, 2);
+});
+
+test("planGraphWorkflow (Composer 自动规划,不传 spec)", async () => {
+  await rm(TMP, { recursive: true, force: true });
+  await mkdir(TMP, { recursive: true });
+  const p = await createProject(TMP, "写小说", "小说");
+  const { planGraphWorkflow } = await import("../src/pipeline.js");
+  const spec = await planGraphWorkflow(TMP, p.id, fakeClient);
+  assert.equal(spec.flow_type, "graph");
+  assert.ok(spec.capabilities.length > 0);
+  assert.ok(spec.guardrails.hard.max_iterations > 0);
+  assert.ok(spec.entry_node);
+  const state = await getProject(TMP, p.id);
+  assert.equal(state.status.workflows.solution?.workflow_status, "plan_review");
 });
 
 function projectPath(root: string, id: string) { return join(root, "projects", id); }
