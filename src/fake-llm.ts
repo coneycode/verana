@@ -26,7 +26,7 @@ export class FakeLlmClient implements LlmClient {
 }
 
 export function fakeClarifierQuestion() {
-  return { question: "你要监控哪些平台?", risk: "不澄清会导致方案偏掉。" };
+  return { dimension: "平台", question: "你要监控哪些平台?", risk: "不澄清会导致方案偏掉。" };
 }
 
 export function fakeExecutorContent() {

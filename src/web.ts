@@ -248,10 +248,10 @@ function renderMain() {
     const entries = state.status.clarifier?.clarifications ?? [];
     el.innerHTML = '<div class="guide"><div class="guide-title">澄清目标</div>'+
       (qText ? '<div class="guide-desc">'+escapeHtml(qText)+'</div>' : '<div class="guide-desc muted">目标已足够清晰,可直接生成 Plan。</div>')+
-      (rText ? '<div class="risk-box">'+escapeHtml(rText)+'</div>' : '')+
+      (rText ? '<div class="risk-box">'+escapeHtml(stripDim(rText))+'</div>' : '')+
       '<input id="answer" placeholder="输入你的回答" />'+
       '<div class="row" style="margin-top:8px"><button id="answerBtn">'+(cq?'提交回答':'直接生成 Plan')+'</button><button class="secondary" id="finishClarifyBtn">跳过,直接生成 Plan</button></div></div>'+
-      (entries.length ? '<div class="section-title" style="margin-top:12px">已澄清记录</div><div class="body">'+entries.map(e => '<div class="qa-item"><div class="qa-q">Q: '+escapeHtml(e.q)+'</div><div class="qa-a">A: '+escapeHtml(e.a)+'</div><div class="muted">⚠ '+escapeHtml(e.risk)+'</div></div>').join('')+'</div>' : '');
+      (entries.length ? '<div class="section-title" style="margin-top:12px">已澄清记录</div><div class="body">'+entries.map(e => '<div class="qa-item"><div class="qa-q">Q: '+escapeHtml(e.q)+'</div><div class="qa-a">A: '+escapeHtml(e.a)+'</div><div class="muted">⚠ '+escapeHtml(stripDim(e.risk))+'</div></div>').join('')+'</div>' : '');
     const answerBtn = $('answerBtn'); if (answerBtn) answerBtn.onclick = () => cq ? doAnswer() : doPlan();
     const finishBtn = $('finishClarifyBtn'); if (finishBtn) finishBtn.onclick = () => doPlan();
     return;
@@ -601,6 +601,7 @@ function connectEvents() {
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function stripDim(s) { return String(s).replace(/^\[.+?\]\s*/, ''); }
 
 ${MD_RENDERER_JS}
 
