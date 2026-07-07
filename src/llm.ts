@@ -144,11 +144,65 @@ export class HttpLlmClient implements LlmClient {
 }
 
 export function parseJsonLoose<T = unknown>(raw: string): T {
-  const fenced = raw.replace(/```json\s*/g, "").replace(/```/g, "").trim();
+  let fenced = raw.replace(/```json\s*/g, "").replace(/```/g, "").trim();
   const start = fenced.search(/[[{]/);
   const end = Math.max(fenced.lastIndexOf("}"), fenced.lastIndexOf("]"));
   if (start === -1 || end === -1) throw new Error(`No JSON found in LLM output: ${raw.slice(0, 200)}`);
-  return JSON.parse(fenced.slice(start, end + 1)) as T;
+  const jsonStr = fenced.slice(start, end + 1);
+  try {
+    return JSON.parse(jsonStr) as T;
+  } catch (e1) {
+    // 容错:尝试修复常见问题 — 字符串值内未转义的换行/引号
+    try {
+      const fixed = repairJson(jsonStr);
+      return JSON.parse(fixed) as T;
+    } catch {
+      // 最后兜底:逐字段提取(适用于扁平对象)
+      const extracted = extractFieldsLoose(jsonStr);
+      if (extracted) return extracted as T;
+      throw new Error(`JSON parse failed even after repair: ${(e1 as Error).message} | raw: ${raw.slice(0, 200)}`);
+    }
+  }
+}
+
+/** 修复 JSON 字符串值内的未转义字符(换行/制表符/内部引号) */
+function repairJson(s: string): string {
+  let result = "";
+  let inString = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '"' && (i === 0 || s[i - 1] !== "\\")) {
+      inString = !inString;
+      result += ch;
+    } else if (inString && ch === "\n") {
+      result += "\\n";
+    } else if (inString && ch === "\r") {
+      result += "\\r";
+    } else if (inString && ch === "\t") {
+      result += "\\t";
+    } else {
+      result += ch;
+    }
+  }
+  return result;
+}
+
+/** 扁平对象的宽松提取:从 "key": "value" 对中提取字段(最后兜底) */
+function extractFieldsLoose(s: string): Record<string, unknown> | null {
+  const result: Record<string, unknown> = {};
+  const re = /"(\w+)"\s*:\s*("(?:[^"\\]|\\.)*"|true|false|null|\d+(?:\.\d+)?)/g;
+  let match;
+  while ((match = re.exec(s)) !== null) {
+    const key = match[1];
+    let val: unknown = match[2];
+    if (val === "true") val = true;
+    else if (val === "false") val = false;
+    else if (val === "null") val = null;
+    else if (typeof val === "string" && val.startsWith('"')) val = val.slice(1, -1);
+    else if (typeof val === "string") val = Number(val);
+    result[key] = val;
+  }
+  return Object.keys(result).length > 0 ? result : null;
 }
 
 // Backward-compat stub for old tests
