@@ -10,7 +10,7 @@ export class FakeLlmClient implements LlmClient {
 
   constructor(private readonly responder: (role: ModelRole, system: string, user: string) => FakeResponse) {}
 
-  async complete(role: ModelRole, system: string, user: string): Promise<string> {
+  async complete(role: ModelRole, system: string, user: string, onDelta?: (delta: string) => void): Promise<string> {
     this.calls.push({ role, system, user });
     const response = this.responder(role, system, user);
     if (response.complete !== undefined) return response.complete;

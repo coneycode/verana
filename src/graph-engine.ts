@@ -245,9 +245,14 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     "请完成本节点的工作并产出内容。",
   ].join("\n");
 
-  bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: "LLM 生成中..." }));
+  bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: "LLM 流式生成中..." }));
 
-  const content = await client.complete("composer", EXECUTOR_SYSTEM, userPrompt);
+  let accumulated = "";
+  const content = await client.complete("composer", EXECUTOR_SYSTEM, userPrompt, (delta) => {
+    accumulated += delta;
+    // 每个 delta 实时推到前端(只推 delta,前端追加)
+    bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", delta }));
+  });
   await appendFile(streamPath, `\n## LLM 输出\n\n${content}\n`, "utf8");
   bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: "LLM 输出完成", content }));
 

@@ -128,6 +128,11 @@ export function renderHomePage(): string {
     .exec-right { overflow-y:auto; }
     .stream-box { background:#050b17; border:1px solid #1f2d46; border-radius:8px; padding:12px; font-size:13px; white-space:pre-wrap; word-break:break-word; min-height:200px; max-height:calc(100vh - 280px); overflow:auto; }
     .stream-status { font-size:12px; color:var(--muted); margin-bottom:6px; }
+    .live-feed { background:#050b17; border:1px solid #1f2d46; border-radius:8px; padding:10px; font-size:13px; min-height:200px; max-height:calc(100vh - 280px); overflow:auto; font-family: ui-monospace,"SF Mono",Menlo,monospace; }
+    .live-feed .step-line { color:#93c5fd; padding:3px 0; border-bottom:1px solid #0d1626; }
+    .live-feed .llm-line { color:#dbeafe; padding:0; white-space:pre-wrap; word-break:break-word; }
+    .live-feed .meta-line { color:var(--muted); padding:2px 0; }
+    .live-feed .feed-ts { color:#475569; font-size:11px; margin-right:6px; }
   </style>
 </head>
 <body>
@@ -159,6 +164,8 @@ let workflowSpec = null;
 let activeRunId = null;
 let selectedTaskId = null;
 let streamContent = '';
+let liveFeed = [];   // 执行阶段实时事件流:每条 {type, text, ts}
+let currentStreamRunId = null;  // 当前正在流式输出的 run
 const $ = (id) => document.getElementById(id);
 
 const STEPS = [
@@ -190,6 +197,8 @@ async function selectProject(id) {
   workflowSpec = null;
   selectedTaskId = null;
   streamContent = '';
+  liveFeed = [];
+  currentStreamRunId = null;
   $('empty').style.display='none';
   $('detail').style.display='block';
   await refresh();
@@ -220,7 +229,10 @@ function getPhase() {
 function render() {
   $('statusBox').textContent = JSON.stringify({ project: state.project, status: state.status }, null, 2);
   renderSteps();
-  renderMain();
+  // executing/awaiting_human 阶段:主区域已建立 liveFeed,preserveMode=true 时不重绘(避免丢实时流)
+  const phase = getPhase();
+  const preserve = (phase === 'executing' || phase === 'awaiting_human') && $('liveFeedBox');
+  if (!preserve) renderMain();
 }
 
 function renderSteps() {
@@ -274,7 +286,7 @@ function renderMain() {
     return;
   }
 
-  // --- Executing (图模型:轮次时间线 + blackboard 面板 + 当前节点输出) ---
+  // --- Executing (图模型:全流程实时事件流 + blackboard 面板) ---
   if (phase === 'executing') {
     const wf = state.status.workflows.solution;
     const iter = wf?.iteration ?? 0;
@@ -284,7 +296,7 @@ function renderMain() {
       '<div id="blackboardPanel" style="margin-top:12px"></div>';
     $('runContinueBtn').onclick = () => doRun();
     renderTimeline('execTimeline');
-    renderExecStream('execStreamArea');
+    renderLiveStream('execStreamArea');
     renderBlackboard('blackboardPanel');
     return;
   }
@@ -415,6 +427,65 @@ function renderBlackboard(containerId) {
   }
   html += '</div>';
   el.innerHTML = html;
+}
+
+function renderLiveStream(containerId) {
+  const el = $(containerId);
+  if (!el) return;
+  const wf = state?.status?.workflows?.solution;
+  const curNode = wf?.current_node;
+  const iter = wf?.iteration ?? 0;
+  // 顶部状态栏
+  let html = '<div class="stream-status">节点: '+escapeHtml(curNode||'-')+' | 轮次: '+iter+(currentStreamRunId?' | '+escapeHtml(currentStreamRunId):'')+'</div>';
+  // 实时事件流
+  html += '<div class="live-feed" id="liveFeedBox">';
+  if (liveFeed.length === 0) {
+    html += '<div class="muted" style="padding:12px">等待调度大脑第一步决策...</div>';
+  } else {
+    for (const item of liveFeed) {
+      const cls = item.type === 'llm' ? 'llm-line' : (item.type === 'step' ? 'step-line' : 'meta-line');
+      html += '<div class="'+cls+'"><span class="feed-ts">'+escapeHtml(item.ts)+'</span> '+item.text+'</div>';
+    }
+  }
+  html += '</div>';
+  el.innerHTML = html;
+  // 自动滚到底
+  const box = $('liveFeedBox');
+  if (box) box.scrollTop = box.scrollHeight;
+}
+
+function pushLiveItem(type, text) {
+  const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  liveFeed.push({ type, text, ts });
+  if (liveFeed.length > 500) liveFeed = liveFeed.slice(-500);
+  const box = $('liveFeedBox');
+  if (box) {
+    const cls = type === 'llm' ? 'llm-line' : (type === 'step' ? 'step-line' : 'meta-line');
+    const div = document.createElement('div');
+    div.className = cls;
+    div.innerHTML = '<span class="feed-ts">'+escapeHtml(ts)+'</span> '+text;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+}
+
+/** LLM delta 连续追加:如果上一条是同 run 的 llm-line,追加到它;否则新建一条 */
+function appendLlmDelta(delta) {
+  const box = $('liveFeedBox');
+  if (!box) return;
+  const lastDiv = box.lastElementChild;
+  if (lastDiv && lastDiv.className === 'llm-line') {
+    // 追加到上一条(不加时间戳)
+    lastDiv.appendChild(document.createTextNode(delta));
+    box.scrollTop = box.scrollHeight;
+  } else {
+    // 新建一条 llm-line(不带时间戳,因为是流式正文)
+    const div = document.createElement('div');
+    div.className = 'llm-line';
+    div.textContent = delta;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
 }
 
 function renderExecStream(containerId) {
@@ -576,26 +647,50 @@ function connectEvents() {
   $('connection').textContent = 'SSE: connecting';
   source.onopen = () => $('connection').textContent = 'SSE: connected';
   source.onerror = () => $('connection').textContent = 'SSE: disconnected';
-  ['snapshot','project_created','plan_composed','gate_approved','gate_rejected','run_completed','run_failed','input_recorded','status_changed','node_selected','blackboard_updated','human_required','human_verdict','verdict'].forEach(type => source.addEventListener(type, () => { refresh(); }));
+  ['snapshot','project_created','plan_composed','gate_approved','gate_rejected','run_completed','run_failed','input_recorded','status_changed','blackboard_updated','human_required','human_verdict','verdict'].forEach(type => source.addEventListener(type, () => { refresh(); }));
+  // 全流程步骤事件 → liveFeed
+  source.addEventListener('node_selected', (event) => {
+    const data = JSON.parse(event.data);
+    const p = data.payload || {};
+    if (p.reason) pushLiveItem('step', '🧠 <b>调度决策</b>: 选 '+escapeHtml(p.node||'?')+' — '+escapeHtml(p.reason));
+    else if (p.runId) pushLiveItem('step', '▶️ <b>开始执行</b>: '+escapeHtml(p.node||'?')+' ('+escapeHtml(p.runId)+')');
+    refresh();
+  });
+  source.addEventListener('verdict', (event) => {
+    const data = JSON.parse(event.data);
+    const p = data.payload || {};
+    const pass = p.verdict?.passed;
+    pushLiveItem('step', (pass?'✅ ':'❌ ')+'<b>验证</b>: '+escapeHtml(p.node||'?')+' '+(pass?'通过':'未通过')+(p.verdict?.reasons?.length?(' — '+escapeHtml(p.verdict.reasons[0].slice(0,80))):''));
+    refresh();
+  });
+  source.addEventListener('blackboard_updated', (event) => {
+    const data = JSON.parse(event.data);
+    const p = data.payload || {};
+    pushLiveItem('meta', '📝 <b>记忆更新</b>: '+escapeHtml(p.node||'?')+(p.fields?.length?(' → '+escapeHtml(p.fields.join(', '))):''));
+    refresh();
+  });
+  source.addEventListener('human_required', (event) => {
+    const data = JSON.parse(event.data);
+    const p = data.payload || {};
+    pushLiveItem('step', '⚠️ <b>需要人审</b>: '+escapeHtml(p.scene||'?')+' — '+escapeHtml(p.reason||''));
+    refresh();
+  });
+  // LLM 流式 delta → liveFeed 实时追加
   source.addEventListener('llm_stream', (event) => {
     const data = JSON.parse(event.data);
     const payload = data.payload || {};
-    if (payload.runId) activeRunId = payload.runId;
-    if (payload.nodeId) { /* 当前节点通过 state 获取 */ }
-    if (payload.content) {
-      streamContent = payload.content;
+    if (payload.runId) { activeRunId = payload.runId; currentStreamRunId = payload.runId; }
+    if (payload.delta) {
+      // delta 逐字追加 — 同 run 的连续 delta 合并到上一条 llm-line(不重复加时间戳)
+      appendLlmDelta(payload.delta);
     } else if (payload.message) {
-      streamContent = payload.message;
-    }
-    const box = $('streamBox');
-    if (box) {
-      box.innerHTML = streamContent ? markdownToHtml(streamContent) : escapeHtml('等待 LLM 响应...');
+      pushLiveItem('meta', '💬 '+escapeHtml(payload.message));
+    } else if (payload.content) {
+      currentStreamRunId = null;
     }
     const phase = getPhase();
     if (phase === 'executing') {
       renderTimeline('execTimeline');
-      renderExecStream('execStreamArea');
-      renderBlackboard('blackboardPanel');
     }
   });
 }
