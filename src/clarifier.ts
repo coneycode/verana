@@ -35,7 +35,9 @@ export async function nextClarificationQuestion(state: ProjectState, client: Llm
 
 export function appendClarification(state: ProjectState, answer: string, next: NextQuestion | null): ProjectState {
   const previous = state.status.clarifier?.clarifications ?? [];
-  const lastQuestion = previous.length > 0 ? previous[previous.length - 1]?.q : state.project.goal;
+  // q 应该是"当前问的问题",不是项目目标;第一次回答时从 current_question 取
+  const lastQuestion = state.status.clarifier?.current_question?.question
+    ?? (previous.length > 0 ? previous[previous.length - 1]?.q : "");
 
   state.status.clarifier = {
     status: "clarifying",
