@@ -458,34 +458,35 @@ function pushLiveItem(type, text) {
   const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
   liveFeed.push({ type, text, ts });
   if (liveFeed.length > 500) liveFeed = liveFeed.slice(-500);
-  const box = $('liveFeedBox');
-  if (box) {
-    const cls = type === 'llm' ? 'llm-line' : (type === 'step' ? 'step-line' : 'meta-line');
-    const div = document.createElement('div');
-    div.className = cls;
-    div.innerHTML = '<span class="feed-ts">'+escapeHtml(ts)+'</span> '+text;
-    box.appendChild(div);
-    box.scrollTop = box.scrollHeight;
-  }
+  rerenderLiveFeed();
 }
 
-/** LLM delta 连续追加:如果上一条是同 run 的 llm-line,追加到它;否则新建一条 */
+/** LLM delta 连续追加:合并到 liveFeed 最后一条 llm 条目(同一 run 的连续 delta 不拆开) */
 function appendLlmDelta(delta) {
+  const last = liveFeed[liveFeed.length - 1];
+  if (last && last.type === 'llm') {
+    // 追加到上一条 llm
+    last.text += escapeHtml(delta);
+  } else {
+    // 新建一条 llm(不带时间戳,因为是流式正文)
+    liveFeed.push({ type: 'llm', text: escapeHtml(delta), ts: '' });
+    if (liveFeed.length > 500) liveFeed = liveFeed.slice(-500);
+  }
+  // 重绘整个 feed(简单可靠,500 条上限内性能可接受)
+  rerenderLiveFeed();
+}
+
+function rerenderLiveFeed() {
   const box = $('liveFeedBox');
   if (!box) return;
-  const lastDiv = box.lastElementChild;
-  if (lastDiv && lastDiv.className === 'llm-line') {
-    // 追加到上一条(不加时间戳)
-    lastDiv.appendChild(document.createTextNode(delta));
-    box.scrollTop = box.scrollHeight;
-  } else {
-    // 新建一条 llm-line(不带时间戳,因为是流式正文)
-    const div = document.createElement('div');
-    div.className = 'llm-line';
-    div.textContent = delta;
-    box.appendChild(div);
-    box.scrollTop = box.scrollHeight;
+  let html = '';
+  for (const item of liveFeed) {
+    const cls = item.type === 'llm' ? 'llm-line' : (item.type === 'step' ? 'step-line' : 'meta-line');
+    const ts = item.ts ? '<span class="feed-ts">'+escapeHtml(item.ts)+'</span> ' : '';
+    html += '<div class="'+cls+'">'+ts+item.text+'</div>';
   }
+  box.innerHTML = html;
+  box.scrollTop = box.scrollHeight;
 }
 
 function renderExecStream(containerId) {
