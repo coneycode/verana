@@ -50,9 +50,9 @@ export class HermesAdapter implements ExecutorAdapter {
   }
 
   async execute(prompt: string, workdir: string, opts: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number } = {}): Promise<AgentRun> {
-    const maxTurns = opts.maxTurns ?? 15;
-    const timeoutMs = opts.timeoutMs ?? 300_000;  // 5 分钟默认(带 web 工具的调研可能很久)
-    const toolsets = opts.toolsets ?? ["web"];   // 默认开 web 工具
+    const maxTurns = opts.maxTurns ?? 90;  // hermes 默认 90,不压低
+    const timeoutMs = opts.timeoutMs ?? 600_000;  // 10 分钟
+    const toolsets = opts.toolsets ?? ["web"];
 
     const args = [
       "chat",

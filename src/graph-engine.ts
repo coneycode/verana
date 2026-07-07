@@ -253,7 +253,7 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     const adapter = new HermesAdapter();
     const probe = await adapter.probe();
     if (!probe.available) throw new Error(`Hermes executor not available: ${probe.reason}`);
-    const agentRun = await adapter.execute(promptParts.join("\n"), dir, { maxTurns: 20, toolsets: ["web", "browser"], timeoutMs: 600_000 });
+    const agentRun = await adapter.execute(promptParts.join("\n"), dir, { maxTurns: 90, toolsets: ["web", "browser"], timeoutMs: 600_000 });
     content = agentRun.claim || agentRun.raw;
     if (!content) throw new Error(`Hermes agent returned empty (exit ${agentRun.exitCode})`);
     await appendFile(streamPath, `\n## Hermes Agent 输出\n\n${content}\n`, "utf8");
