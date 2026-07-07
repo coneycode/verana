@@ -2,7 +2,7 @@ import type { LlmClient } from "./llm.js";
 import type { CapabilityNode, GraphWorkflowSpec } from "./types.js";
 import { renderBlackboardForContext } from "./blackboard.js";
 
-const SCHEDULER_SYSTEM = `你是一个调度大脑(scheduler)。你的职责是基于当前运行时状态,从预定义的能力清单里选一个下一步执行的节点。
+const SCHEDULER_SYSTEM = `你是一个调度大脑(scheduler)。你的职责是基于当前进度真相,从预定义的能力清单里选一个下一步执行的节点。
 
 你必须返回 JSON:
 {"next_node": "节点id", "reason": "为什么选这个节点", "capability_gap": "如果当前能力清单里没有合适的能力,在这里描述需要什么能力(否则留空)", "is_complete": true/false}
@@ -10,8 +10,9 @@ const SCHEDULER_SYSTEM = `你是一个调度大脑(scheduler)。你的职责是�
 规则:
 - 只能从给定的能力清单(capabilities)里选 next_node,不能编造清单外的节点
 - 如果清单里没有合适的能力,设 next_node 为空,capability_gap 里描述需要什么能力
-- 如果当前状态已经满足完成标准(completion_criteria),设 is_complete 为 true,next_node 为空
-- reason 必须具体,说明基于当前 blackboard 哪些信息做的判断
+- 如果进度真相显示已完成标准(completion_criteria)所需的节点都验证通过,设 is_complete 为 true,next_node 为空
+- **关键:进度真相里 verdict=passed 的节点不要重复选**——它已验证通过,除非需要再产出一个新实例(如写下一章)
+- reason 必须具体,说明基于进度真相里的哪些事实做的判断
 - 用中文`;
 
 export interface SchedulerDecision {
@@ -25,7 +26,7 @@ export async function runScheduler(
   client: LlmClient,
   spec: GraphWorkflowSpec,
   blackboard: Record<string, unknown>,
-  lastNodeOutput: string,
+  progressTruth: string,
   iteration: number,
 ): Promise<SchedulerDecision> {
   const capList = spec.capabilities.map((c) => `- ${c.id} [${c.kind}]: ${c.desc}`).join("\n");
@@ -43,10 +44,9 @@ export async function runScheduler(
     "",
     bbCtx,
     "",
-    "上一个完成的节点产出:",
-    lastNodeOutput.slice(0, 2000) || "(无,这是第一步)",
+    progressTruth,
     "",
-    "请选择下一步执行的节点。",
+    "请基于进度真相选择下一步。已验证 passed 的节点不要重复选(除非需要产新实例)。",
   ].join("\n");
 
   return client.completeJson<SchedulerDecision>("composer", SCHEDULER_SYSTEM, userPrompt);

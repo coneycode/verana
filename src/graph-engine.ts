@@ -10,9 +10,14 @@ import type {
   SnapshotRecord, VerdictRecord,
 } from "./types.js";
 import { renderBlackboardForContext, setBlackboardField } from "./blackboard.js";
-import { appendEvent, readEvents, writeSnapshot, readLatestSnapshot, nextSeq } from "./event-log.js";
+import { appendEvent, readEvents, writeSnapshot, readLatestSnapshot, nextSeq, buildProgressTruth } from "./event-log.js";
 import { checkHardGuardrails, checkSoftGuardrails, shouldHumanCheckpoint, type GuardrailCheckResult } from "./guardrails.js";
 import { runScheduler, reviewCapabilityGap, type SchedulerDecision } from "./scheduler.js";
+import type { ExecutorAdapter } from "./executors.js";
+
+// 测试注入:设了就用 fake executor,不调 hermes CLI
+let injectedExecutor: ExecutorAdapter | null = null;
+export function setExecutorForTest(ea: ExecutorAdapter | null) { injectedExecutor = ea; }
 
 const EXECUTOR_SYSTEM = `你是一个执行者。根据节点描述和上下文,完成指定的工作,产出交付物。
 
@@ -67,7 +72,6 @@ export async function runGraphProject(rootDir: string, projectId: string, client
     }
   }
 
-  let lastNodeOutput = "";
   let consecutiveFail = 0;
 
   while (true) {
@@ -96,8 +100,11 @@ export async function runGraphProject(rootDir: string, projectId: string, client
       return;
     }
 
-    // 调度大脑决策
-    const decision = await runScheduler(client, spec, wf.blackboard, lastNodeOutput, wf.iteration);
+    // 进度真相:从事件日志提取带 verdict 的执行轨迹,机械折叠成摘要(不吃 claim!)
+    const progressTruth = await buildProgressTruth(solutionDir);
+
+    // 调度大脑决策 — 吃 verdict 事实,不吃 claim
+    const decision = await runScheduler(client, spec, wf.blackboard, progressTruth, wf.iteration);
     await appendEvent(solutionDir, { type: "scheduler_decision", reason: decision.reason, data: { next_node: decision.next_node, is_complete: decision.is_complete, capability_gap: decision.capability_gap } });
     bus?.publish(projectEvent("node_selected", projectId, { node: decision.next_node, reason: decision.reason }));
 
@@ -191,8 +198,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
         bus?.publish(projectEvent("human_required", projectId, { scene: "failure", reason: wf.awaiting_reason }));
         return;
       }
-      // 带反馈重跑(下一轮调度会重新选中)
-      lastNodeOutput = `(上次 ${node.id} verdict fail: ${verdict.reasons.join("; ")})`;
+      // 带反馈重跑(下一轮调度会基于进度真相决策)
       continue;
     }
 
@@ -203,7 +209,6 @@ export async function runGraphProject(rootDir: string, projectId: string, client
       bus?.publish(projectEvent("blackboard_updated", projectId, { node: node.id, fields: node.updates }));
     }
 
-    lastNodeOutput = runResult.slice(0, 2000);
     wf.iteration += 1;
     await appendEvent(solutionDir, { type: "node_done", node: node.id, run_id: runId });
     await saveProjectState(rootDir, state);
@@ -250,10 +255,12 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     // 重节点:走 ExecutorAdapter(hermes CLI),让 agent 框架用自己的工具(web/browser/...)完成
     bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: "调用 Hermes agent 执行(带 web 工具)..." }));
     const { HermesAdapter } = await import("./executors.js");
-    const adapter = new HermesAdapter();
+    const adapter = injectedExecutor ?? new HermesAdapter();
     const probe = await adapter.probe();
     if (!probe.available) throw new Error(`Hermes executor not available: ${probe.reason}`);
-    const agentRun = await adapter.execute(promptParts.join("\n"), dir, { maxTurns: 90, toolsets: ["web", "browser"], timeoutMs: 600_000 });
+    // 测试环境(fake executor)用短 timeout;真实 hermes 用 10min
+    const isFake = adapter.name !== "hermes";
+    const agentRun = await adapter.execute(promptParts.join("\n"), dir, { maxTurns: 90, toolsets: ["web", "browser"], timeoutMs: isFake ? 30_000 : 600_000 });
     content = agentRun.claim || agentRun.raw;
     if (!content) throw new Error(`Hermes agent returned empty (exit ${agentRun.exitCode})`);
     await appendFile(streamPath, `\n## Hermes Agent 输出\n\n${content}\n`, "utf8");

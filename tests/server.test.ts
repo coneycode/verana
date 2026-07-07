@@ -6,6 +6,8 @@ import test from "node:test";
 
 import { buildServer } from "../src/server.js";
 import { buildSmartFakeClient } from "../src/fake-llm.js";
+import { setExecutorForTest } from "../src/graph-engine.js";
+import { FakeExecutorAdapter } from "../src/fake-llm.js";
 import type { GraphWorkflowSpec } from "../src/types.js";
 
 function makeSpec(pid: string): GraphWorkflowSpec {
@@ -25,7 +27,8 @@ function makeSpec(pid: string): GraphWorkflowSpec {
   };
 }
 
-test("Server: create → plan(spec) → approve → run → final_review", async () => {
+test("graph workflow: create → plan → approve → run → final_review", async () => {
+  setExecutorForTest(new FakeExecutorAdapter());  // 不调真实 hermes
   const root = await mkdtemp(join(tmpdir(), "verana-srv-graph-"));
   const client = buildSmartFakeClient();
   const app = await buildServer({ rootDir: root, client });

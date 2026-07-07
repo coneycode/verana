@@ -5,6 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { runCli } from "../src/cli.js";
+import { setExecutorForTest } from "../src/graph-engine.js";
+import { FakeExecutorAdapter } from "../src/fake-llm.js";
 import { buildSmartFakeClient } from "../src/fake-llm.js";
 import type { GraphWorkflowSpec } from "../src/types.js";
 
@@ -26,6 +28,7 @@ function makeSpec(pid: string): GraphWorkflowSpec {
 }
 
 test("CLI: new → approve plan → run → status", async () => {
+  setExecutorForTest(new FakeExecutorAdapter());
   const root = await mkdtemp(join(tmpdir(), "verana-cli-graph-"));
   const client = buildSmartFakeClient();
   const lines: string[] = [];
