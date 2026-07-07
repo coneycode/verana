@@ -192,10 +192,10 @@ export async function runGraphProject(rootDir: string, projectId: string, client
       if (retries >= maxRetries) {
         wf.workflow_status = "awaiting_human";
         wf.awaiting = "human";
-        wf.awaiting_reason = `节点 ${node.id} 失败且重试耗尽 (${retries}次)`;
+        wf.awaiting_reason = `节点 ${node.id} 失败且重试耗尽 (${retries}次)。失败原因: ${verdict.reasons.join("; ").slice(0, 300)}`;
         wf.awaiting_scene = "failure";
         await saveProjectState(rootDir, state);
-        bus?.publish(projectEvent("human_required", projectId, { scene: "failure", reason: wf.awaiting_reason }));
+        bus?.publish(projectEvent("human_required", projectId, { scene: "failure", reason: wf.awaiting_reason, verdict }));
         return;
       }
       // 带反馈重跑(下一轮调度会基于进度真相决策)
@@ -448,6 +448,10 @@ export async function applyHumanVerdict(rootDir: string, projectId: string, verd
     wf.awaiting = "none";
     wf.awaiting_reason = undefined;
     wf.awaiting_scene = undefined;
+    // retry:清除该节点的重试计数,让它能重新跑
+    if (verdict.action === "retry" && wf.current_node) {
+      wf.node_retries[wf.current_node] = 0;
+    }
   }
   await saveProjectState(rootDir, state);
 }

@@ -308,13 +308,15 @@ function renderMain() {
     const reason = wf?.awaiting_reason ?? '需要人审';
     const sceneLabels = { failure: '失败/异常', guardrail: '碰护栏', capability_gap: '能力缺口', checkpoint: '阶段检查点', anomaly: '状态异常' };
     el.innerHTML = '<div class="guide"><div class="guide-title" style="color:var(--warn)">需要人审: '+escapeHtml(sceneLabels[scene] || scene)+'</div><div class="guide-desc">'+escapeHtml(reason)+'</div>'+
-      '<div class="row"><button class="good" id="humanContinueBtn">继续执行</button><button class="bad" id="humanAbortBtn">放弃</button></div>'+
-      '<div style="margin-top:10px"><div class="muted" style="margin-bottom:4px">给调度大脑的方向指令(可选,持续影响后续调度):</div><textarea id="humanDirection" placeholder="例如:接下来往悬疑方向收紧,或者:第3章节奏太慢要加快"></textarea></div>'+
-      '<div style="margin-top:8px"><div class="muted" style="margin-bottom:4px">手动编辑 blackboard(可选,JSON 格式):</div><textarea id="humanBbEdit" placeholder="例如: {\"summary\":\"修改后的摘要\"}" style="min-height:50px"></textarea></div>'+
-      '</div><div id="blackboardPanel"></div>';
+      '<div class="row"><button class="good" id="humanContinueBtn">继续执行</button><button class="secondary" id="humanRetryBtn">重试 '+escapeHtml(wf?.current_node||'')+'</button><button class="bad" id="humanAbortBtn">放弃</button></div>'+
+      '<div style="margin-top:10px"><div class="muted" style="margin-bottom:4px">给调度大脑的方向指令(可选,持续影响后续调度):</div><textarea id="humanDirection" placeholder="例如:产出要纯净正文不要混入汇报文字,或者:第3章节奏太慢要加快"></textarea></div>'+
+      '<div style="margin-top:8px"><div class="muted" style="margin-bottom:4px">手动编辑 blackboard(可选,JSON 格式):</div><textarea id="humanBbEdit" placeholder="例如: {&quot;summary&quot;:&quot;修改后的摘要&quot;}" style="min-height:50px"></textarea></div>'+
+      '</div><div id="lastRunPanel" style="margin-top:12px"></div><div id="blackboardPanel" style="margin-top:12px"></div>';
     $('humanContinueBtn').onclick = () => doHumanVerdict('continue');
+    $('humanRetryBtn').onclick = () => doHumanVerdict('retry');
     $('humanAbortBtn').onclick = () => doHumanVerdict('abort');
     renderBlackboard('blackboardPanel');
+    loadLastRunForHuman('lastRunPanel', wf?.current_node);
     return;
   }
 
@@ -619,8 +621,26 @@ async function doHumanVerdict(action) {
     }
     await post('/projects/'+selectedId+'/human-verdict', body);
     await refresh();
+    // continue/retry 后自动触发 run(让引擎继续跑)
+    if (action === 'continue' || action === 'retry') {
+      await post('/projects/'+selectedId+'/run');
+    }
   } catch(e) { alert(e.message); }
   setBusy(false);
+}
+
+async function loadLastRunForHuman(containerId, nodeId) {
+  const el = $(containerId);
+  if (!el || !selectedId || !nodeId) return;
+  try {
+    const wf = state?.status?.workflows?.solution;
+    const runs = wf?.runs?.[nodeId] || [];
+    if (runs.length === 0) { el.innerHTML = '<div class="muted">无历史 run 记录</div>'; return; }
+    const lastRunId = runs[runs.length - 1];
+    const res = await fetch('/projects/'+selectedId+'/runs/'+lastRunId+'/stream');
+    const text = await res.text();
+    el.innerHTML = '<div class="section-title">最近产出 ('+escapeHtml(lastRunId)+')</div><div class="body" style="max-height:300px;overflow:auto">'+markdownToHtml(text.slice(-3000))+'</div>';
+  } catch(e) { el.innerHTML = '<div class="muted">加载失败: '+escapeHtml(e.message)+'</div>'; }
 }
 
 function doExportMd() {
