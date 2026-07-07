@@ -25,7 +25,7 @@ export interface ExecutorAdapter {
   capabilities: CapabilityDecl;
   probe(): Promise<ProbeResult>;
   /** 在 workdir 启动 executor 跑一个重节点。prompt 是完整指令(含上下文)。返回 agent 产出 */
-  execute(prompt: string, workdir: string, opts?: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number }): Promise<AgentRun>;
+  execute(prompt: string, workdir: string, opts?: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number; onOutputLine?: (line: string) => void }): Promise<AgentRun>;
 }
 
 export class HermesAdapter implements ExecutorAdapter {
@@ -49,24 +49,25 @@ export class HermesAdapter implements ExecutorAdapter {
     return { available: true, command: this.command, reason: "PATH lookup deferred to process spawn" };
   }
 
-  async execute(prompt: string, workdir: string, opts: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number } = {}): Promise<AgentRun> {
-    const maxTurns = opts.maxTurns ?? 90;  // hermes 默认 90,不压低
-    const timeoutMs = opts.timeoutMs ?? 600_000;  // 10 分钟
+  async execute(prompt: string, workdir: string, opts: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number; onOutputLine?: (line: string) => void } = {}): Promise<AgentRun> {
+    const maxTurns = opts.maxTurns ?? 90;
+    const timeoutMs = opts.timeoutMs ?? 600_000;
     const toolsets = opts.toolsets ?? ["web"];
+    const onOutputLine = opts.onOutputLine;
 
     const args = [
       "chat",
       "-q", prompt,
-      "-Q",                         // 安静模式:只输出最终响应 + session info
       "--max-turns", String(maxTurns),
       "-t", toolsets.join(","),
+      // 不加 -Q:保留工具调用过程输出(web_search/browser 预览),实时推给前端
     ];
 
     return new Promise<AgentRun>((resolve) => {
       const child = spawn(this.command, args, {
         cwd: workdir,
         stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, HERMES_NO_COLOR: "1" },
+        env: { ...process.env, HERMES_NO_COLOR: "1", HERMES_QUIET: "0" },
       });
 
       let stdout = "";
@@ -76,11 +77,23 @@ export class HermesAdapter implements ExecutorAdapter {
         try { child.kill("SIGKILL"); } catch {}
       }, timeoutMs);
 
-      child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+      // 实时推送 stdout 的每一行(hermes 工具调用过程 + 最终输出)
+      let stdoutBuffer = "";
+      child.stdout.on("data", (chunk) => {
+        stdoutBuffer += chunk.toString();
+        const lines = stdoutBuffer.split("\n");
+        stdoutBuffer = lines.pop() ?? "";  // 最后一段留在 buffer
+        for (const line of lines) {
+          stdout += line + "\n";
+          // 实时推给前端(通过 callback,由 graph-engine 接 bus.publish)
+          onOutputLine?.(line);
+        }
+      });
       child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
 
       child.on("close", (code) => {
         clearTimeout(timer);
+        if (stdoutBuffer) { stdout += stdoutBuffer; onOutputLine?.(stdoutBuffer); }
         // 解析:第一行通常是 "session_id: xxx",其余是正文
         const lines = stdout.split("\n");
         let sessionId: string | undefined;
@@ -88,7 +101,6 @@ export class HermesAdapter implements ExecutorAdapter {
         if (lines[0]?.startsWith("session_id:")) {
           sessionId = lines[0].slice("session_id:".length).trim();
           claimStart = 1;
-          // 跳过空行
           while (claimStart < lines.length && lines[claimStart].trim() === "") claimStart++;
         }
         const claim = lines.slice(claimStart).join("\n").trim();

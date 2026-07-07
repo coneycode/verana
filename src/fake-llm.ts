@@ -39,7 +39,7 @@ export class FakeExecutorAdapter implements ExecutorAdapter {
   readonly capabilities = { name: "fake-executor", capabilities: ["web", "browser", "long_running", "skills", "terminal", "file"] };
 
   async probe() { return { available: true, command: "fake" }; }
-  async execute(prompt: string, _workdir: string, _opts?: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number }): Promise<AgentRun> {
+  async execute(prompt: string, _workdir: string, _opts?: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number; onOutputLine?: (line: string) => void }): Promise<AgentRun> {
     return {
       claim: `# 调研产出(模拟)\n\n基于 prompt 完成调研。\n\n来源:\n1. https://example.com/source-1\n2. https://example.com/source-2\n\n要点:产品定义、功能、用户、定价、竞品均有覆盖。`,
       exitCode: 0,
