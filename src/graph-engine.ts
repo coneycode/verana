@@ -233,7 +233,7 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
   }
 
   const bbCtx = renderBlackboardForContext(bb, spec.blackboard_schema);
-  const userPrompt = [
+  const promptParts = [
     `项目目标: ${spec.goal.clarified}`,
     "",
     `节点: ${node.id} (${node.kind})`,
@@ -242,19 +242,33 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     bbCtx,
     inputContents.length > 0 ? `\n输入:\n${inputContents.join("\n")}` : "",
     "",
-    "请完成本节点的工作并产出内容。",
-  ].join("\n");
+    "请完成本节点的工作并产出内容。产出要带真实来源(如查到的 URL、引用的具体文档段落),不要凭空编造。",
+  ];
 
-  bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: "LLM 流式生成中..." }));
-
-  let accumulated = "";
-  const content = await client.complete("composer", EXECUTOR_SYSTEM, userPrompt, (delta) => {
-    accumulated += delta;
-    // 每个 delta 实时推到前端(只推 delta,前端追加)
-    bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", delta }));
-  });
-  await appendFile(streamPath, `\n## LLM 输出\n\n${content}\n`, "utf8");
-  bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: "LLM 输出完成", content }));
+  let content: string;
+  if (node.kind === "agent") {
+    // 重节点:走 ExecutorAdapter(hermes CLI),让 agent 框架用自己的工具(web/browser/...)完成
+    bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: "调用 Hermes agent 执行(带 web 工具)..." }));
+    const { HermesAdapter } = await import("./executors.js");
+    const adapter = new HermesAdapter();
+    const probe = await adapter.probe();
+    if (!probe.available) throw new Error(`Hermes executor not available: ${probe.reason}`);
+    const agentRun = await adapter.execute(promptParts.join("\n"), dir, { maxTurns: 20, toolsets: ["web", "browser"], timeoutMs: 600_000 });
+    content = agentRun.claim || agentRun.raw;
+    if (!content) throw new Error(`Hermes agent returned empty (exit ${agentRun.exitCode})`);
+    await appendFile(streamPath, `\n## Hermes Agent 输出\n\n${content}\n`, "utf8");
+    // 把 agent 产出作为一整段推到前端(hermes -Q 只输出最终结果,不是逐字流)
+    bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", delta: content }));
+    bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: "Hermes agent 执行完成" }));
+  } else {
+    // 轻节点:直调 LLM(判断/转换/更新记忆,不需要工具)
+    bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: "LLM 流式生成中..." }));
+    content = await client.complete("composer", EXECUTOR_SYSTEM, promptParts.join("\n"), (delta) => {
+      bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", delta }));
+    });
+    await appendFile(streamPath, `\n## LLM 输出\n\n${content}\n`, "utf8");
+    bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: "LLM 输出完成" }));
+  }
 
   // 写产出文件
   for (const output of node.outputs ?? []) {
