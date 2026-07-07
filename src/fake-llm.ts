@@ -85,6 +85,9 @@ export function buildSmartFakeClient(): FakeLlmClient {
     }
 
     // Cross check(轻节点交叉验证)
+    if (role === "evaluator" && system.includes("语义重复检测器")) {
+      return { json: { duplicate: false, reason: "不重复" } };
+    }
     if (role === "evaluator" && system.includes("独立验证者") && system.includes("判断另一个模型")) {
       return { json: { agree: true, reason: "独立判断一致" } };
     }
