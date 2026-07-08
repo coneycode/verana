@@ -246,6 +246,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
 
 async function executeNode(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, bb: Record<string, unknown>, client: LlmClient, bus?: EventBus): Promise<{ content: string; instruction: string }> {
   const dir = projectPath(rootDir, projectId);
+  const solutionDir = join(dir, "solution");
   const runDir = join(dir, "runs", runId);
   await mkdir(runDir, { recursive: true });
   const streamPath = join(runDir, "stream.md");
@@ -262,17 +263,38 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
   }
 
   const bbCtx = renderBlackboardForContext(bb, spec.blackboard_schema);
+
+  // 验收标准明示给 executor(执行/验收信息对称)
+  const checksList = (node.checks ?? []).map(c => `- [${c.method}] ${c.desc}`).join("\n");
+
+  // 软引导(主观方向,不强制)
+  const softGuidance = spec.soft_guidance ?? [];
+
+  // 失败反馈:本节点最近的归因结果(让 executor 知道上次错哪、怎么改)
+  const lastDiagnosis = await getNodeDiagnoses(solutionDir, node.id);
+  const failFeedback = lastDiagnosis.length > 0
+    ? lastDiagnosis[lastDiagnosis.length - 1]
+    : null;
+
   const promptParts = [
     `项目目标: ${spec.goal.clarified}`,
     "",
     `节点: ${node.id} (${node.kind})`,
     `描述: ${node.desc}`,
     "",
+    spec.hard_constraints?.length > 0 ? `硬约束(必须严格遵守):\n${spec.hard_constraints.map(c => `- ${c}`).join("\n")}` : "",
+    "",
+    checksList ? `验收标准(必须满足,你会被按这些标准验证):\n${checksList}` : "",
+    "",
+    softGuidance.length > 0 ? `方向引导(主观偏好,尽量遵循但不强制):\n${softGuidance.map(s => `- ${s}`).join("\n")}` : "",
+    "",
     bbCtx,
     inputContents.length > 0 ? `\n输入:\n${inputContents.join("\n")}` : "",
     "",
+    failFeedback ? `【上次失败反馈】\n根因: ${failFeedback.root_cause}\n说明: ${failFeedback.explanation}\n这次请注意避免同样的问题。` : "",
+    "",
     "请完成本节点的工作并产出内容。产出要带真实来源(如查到的 URL、引用的具体文档段落),不要凭空编造。",
-  ];
+  ].filter(p => p !== "");
 
   let content: string;
   if (node.kind === "agent") {

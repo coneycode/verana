@@ -139,6 +139,8 @@ function fakeComposerGraphSpec(userPrompt: string): unknown {
     blackboard_schema: { fields: [{ key: "summary", desc: "滚动摘要", bounded: true }] },
     entry_node: "write_chapter",
     completion_criteria: ["写到2章"],
+    hard_constraints: ["输出纯正文,不含元描述"],
+    soft_guidance: ["悬疑压抑基调"],
     agents: ["writer"],
     required_capabilities: ["web", "long_running"],
   };

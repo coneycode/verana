@@ -44,6 +44,8 @@ const COMPOSER_SYSTEM = `你是一个 workflow 规划者(Composer)。你的职�
   },
   "entry_node": "入口节点id",
   "completion_criteria": ["完成标准1", ...],
+  "hard_constraints": ["客观硬约束:如输出格式/数量/预算/合规/平台限定"],
+  "soft_guidance": ["主观软引导:如风格基调/内容取舍/表达偏好"],
   "agents": ["角色名列表"],
   "required_capabilities": ["web", "browser", "long_running"]
 }
@@ -56,6 +58,9 @@ const COMPOSER_SYSTEM = `你是一个 workflow 规划者(Composer)。你的职�
 - guardrails.hard.max_iterations 必须有(安全阀)
 - creative/iterative 类任务(写多章/反复打磨)→ iterative=true,能力清单含循环潜力(同一节点可被多次调度)
 - research 类任务(一次性调研)→ iterative=false,能力清单线性
+- hard_constraints:从澄清信息中提取客观、可判定的约束(格式/数量/预算/合规/平台),这些将变成 checks 的种子
+- soft_guidance:从澄清信息中提取主观方向性偏好(风格/基调/取舍),这些只作引导不强制
+- 拿不准是硬还是软的,默认归 soft_guidance(宁可少锁不可锁错)
 - entry_node 是调度大脑第一步选的节点(通常是最早的能力)
 - 用中文写 desc
 - required_capabilities 从 [web, browser, long_running] 里选
@@ -160,6 +165,8 @@ function assembleSpec(projectId: string, rawGoal: string, r: ComposerLlmResult):
     },
     entry_node: r.entry_node ?? capabilities[0]?.id ?? "",
     completion_criteria: r.completion_criteria ?? [],
+    hard_constraints: (r as { hard_constraints?: string[] }).hard_constraints ?? [],
+    soft_guidance: (r as { soft_guidance?: string[] }).soft_guidance ?? [],
     policies: { long_running: { idle_watchdog: "30m", max_wall: "4h" }, on_failure: "stop_and_report" },
   };
 }

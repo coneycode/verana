@@ -85,6 +85,8 @@ export interface GraphWorkflowSpec {
   blackboard_schema: BlackboardSchema;
   entry_node: string;       // 入口节点(Composer 指定)
   completion_criteria: string[];  // 完成标准(语义,调度判断)
+  hard_constraints: string[];     // 客观硬约束(进 checks + 进指令,双向锁)
+  soft_guidance: string[];         // 主观软引导(只进指令,保留 agent 自由度)
   policies: {
     long_running: { idle_watchdog: string; max_wall: string };
     on_failure: string;

@@ -23,6 +23,8 @@ function makeSpec(overrides: Partial<GraphWorkflowSpec> = {}): GraphWorkflowSpec
     blackboard_schema: { fields: [{ key: "summary", desc: "摘要", bounded: true }] },
     entry_node: "write_chapter",
     completion_criteria: ["写到20章"],
+    hard_constraints: [],
+    soft_guidance: [],
     policies: { long_running: { idle_watchdog: "30m", max_wall: "4h" }, on_failure: "stop_and_report" },
     ...overrides,
   };
