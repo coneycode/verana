@@ -282,8 +282,9 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
 
   const bbCtx = renderBlackboardForContext(bb, spec.blackboard_schema);
 
-  // 验收标准明示给 executor(执行/验收信息对称)
-  const checksList = (node.checks ?? []).map(c => `- [${c.method}] ${c.desc}`).join("\n");
+  // 验收标准明示给 executor(执行/验收信息对称)— 含 target 和 outputs 路径
+  const checksList = (node.checks ?? []).map(c => `- [${c.method}] ${c.desc}${c.target ? ` (目标: ${c.target})` : ""}`).join("\n");
+  const outputsList = (node.outputs ?? []).map(o => `- ${o.path}: ${o.desc ?? ""}`).join("\n");
 
   // 软引导(主观方向,不强制)
   const softGuidance = spec.soft_guidance ?? [];
@@ -303,6 +304,8 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     spec.hard_constraints?.length > 0 ? `硬约束(必须严格遵守):\n${spec.hard_constraints.map(c => `- ${c}`).join("\n")}` : "",
     "",
     checksList ? `验收标准(必须满足,你会被按这些标准验证):\n${checksList}` : "",
+    "",
+    outputsList ? `产出文件路径(必须写到这些路径):\n${outputsList}` : "",
     "",
     softGuidance.length > 0 ? `方向引导(主观偏好,尽量遵循但不强制):\n${softGuidance.map(s => `- ${s}`).join("\n")}` : "",
     "",
