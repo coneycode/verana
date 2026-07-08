@@ -325,7 +325,7 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     // 测试环境(fake executor)用短 timeout;真实 hermes 用 10min
     const isFake = adapter.name !== "hermes";
     const agentRun = await adapter.execute(promptParts.join("\n"), dir, {
-      maxTurns: 90, toolsets: ["web", "browser"], timeoutMs: isFake ? 30_000 : 600_000,
+      maxTurns: 90, toolsets: ["web", "browser", "terminal", "file"], timeoutMs: isFake ? 30_000 : 600_000,
       onOutputLine: (line) => {
         // hermes 的每一行输出实时推给前端(工具调用过程 + 最终输出)
         if (line.trim()) bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", delta: line + "\n" }));
@@ -376,7 +376,7 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
   return { content: deliverable, instruction: promptParts.join("\n") };
 }
 
-/** 轻节点交叉验证:生成模型出结果 → evaluator 独立判一次 → 不一致转人审 */
+/** 轻节点交叉验证:生成模型出结果 → evaluator 独立判一次 → 不一致(fail)走归因 */
 async function crossCheckLight(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, bb: Record<string, unknown>, client: LlmClient, bus: EventBus | undefined, genResult: string): Promise<VerdictRecord> {
   const dir = projectPath(rootDir, projectId);
   const runDir = join(dir, "runs", runId);
