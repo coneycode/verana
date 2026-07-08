@@ -15,6 +15,7 @@ import { checkHardGuardrails, checkSoftGuardrails, shouldHumanCheckpoint, type G
 import { runScheduler, reviewCapabilityGap, type SchedulerDecision } from "./scheduler.js";
 import type { ExecutorAdapter } from "./executors.js";
 import { diagnoseFailure, type DiagnosisResult } from "./diagnostician.js";
+import { regularizeClaim } from "./regularize.js";
 
 // 测试注入:设了就用 fake executor,不调 hermes CLI
 let injectedExecutor: ExecutorAdapter | null = null;
@@ -329,20 +330,30 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: "LLM 输出完成" }));
   }
 
-  // 写产出文件
+  // claim 留痕(原始产出,带对话外壳,供归因用)
+  await writeFile(join(runDir, "claim.md"), `# Claim\n\nNode ${node.id} (${node.kind}).\n\n${content}`, "utf8");
+
+  // 规整层:claim → deliverable(去对话外壳,轻 LLM 清洗,不改实质)
+  let deliverable = content;
+  if (node.kind === "agent" && content.length > 0) {
+    bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "regularizing", message: "规整产出(去对话外壳)..." }));
+    deliverable = await regularizeClaim(client, content, node.desc);
+    await appendFile(streamPath, `\n## 规整后产出(deliverable)\n\n${deliverable}\n`, "utf8");
+  }
+
+  // 落盘用 deliverable(纯净产出)
   for (const output of node.outputs ?? []) {
     const outPath = join(dir, output.path);
     if (output.path.endsWith("/")) {
       await mkdir(outPath, { recursive: true });
-      await writeFile(join(outPath, "content.md"), content, "utf8");
+      await writeFile(join(outPath, "content.md"), deliverable, "utf8");
     } else {
       await mkdir(join(outPath, ".."), { recursive: true });
-      await writeFile(outPath, content, "utf8");
+      await writeFile(outPath, deliverable, "utf8");
     }
   }
 
-  await writeFile(join(runDir, "claim.md"), `# Claim\n\nNode ${node.id} (${node.kind}).\n\n${content.slice(0, 200)}...`, "utf8");
-  return { content, instruction: promptParts.join("\n") };
+  return { content: deliverable, instruction: promptParts.join("\n") };
 }
 
 /** 轻节点交叉验证:生成模型出结果 → evaluator 独立判一次 → 不一致转人审 */
