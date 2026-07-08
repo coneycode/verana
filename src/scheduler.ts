@@ -2,17 +2,31 @@ import type { LlmClient } from "./llm.js";
 import type { CapabilityNode, GraphWorkflowSpec } from "./types.js";
 import { renderBlackboardForContext } from "./blackboard.js";
 
-const SCHEDULER_SYSTEM = `你是一个调度大脑(scheduler)。你的职责是基于当前进度真相,从预定义的能力清单里选一个下一步执行的节点。
+const SCHEDULER_SYSTEM = `你是一个调度大脑(scheduler)。你是调度决策的唯一出口。你的职责是基于当前进度真相(含归因结果),决定下一步做什么。
 
 你必须返回 JSON:
-{"next_node": "节点id", "reason": "为什么选这个节点", "capability_gap": "如果当前能力清单里没有合适的能力,在这里描述需要什么能力(否则留空)", "is_complete": true/false}
+{"next_node": "节点id(留空表示不执行节点)", "reason": "为什么这么决策", "capability_gap": "如果需要清单里没有的能力,描述需要什么(否则留空)", "is_complete": true/false, "action": "路由动作"}
 
-规则:
-- 只能从给定的能力清单(capabilities)里选 next_node,不能编造清单外的节点
-- 如果清单里没有合适的能力,设 next_node 为空,capability_gap 里描述需要什么能力
-- 如果进度真相显示已完成标准(completion_criteria)所需的节点都验证通过,设 is_complete 为 true,next_node 为空
-- **关键:进度真相里 verdict=passed 的节点不要重复选**——它已验证通过,除非需要再产出一个新实例(如写下一章)
-- reason 必须具体,说明基于进度真相里的哪些事实做的判断
+路由动作(action)可选值:
+- "execute":正常执行 next_node 指定的节点
+- "retry_with_feedback":重跑上次失败的节点(指令已带失败反馈,让它针对性修正)
+- "switch_node":换一个现有节点(当前节点不对路,清单里有更合适的)
+- "request_capability":请求新增能力(capability_gap 描述需要什么,交 Composer 复核)
+- "skip_node":跳过该非必要节点继续(该节点反复失败但不影响主交付)
+- "human":转人审(低频重大决策:删改节点/回澄清/调完成标准/终止)
+
+决策规则:
+- 进度真相里 verdict=passed 的节点不要重复选,除非需要再产出一个新实例(如写下一章)
+- 如果进度真相显示已完成标准(completion_criteria)所需的节点都验证通过,设 is_complete=true
+- 如果有节点 FAIL 且带 [根因:X],按根因路由:
+  - A_instruction_vague(指令不具体):action="retry_with_feedback"(指令已带上次失败反馈,让它修正)
+  - B_capability_gap(能力缺口):action="request_capability"(capability_gap 描述需要什么能力)
+  - C_context_error(上下文错):action="retry_with_feedback"(blackboard 已修正,重跑)
+  - D_standard_unreasonable(标准不合理):action="human"(验收标准要改,属重大决策)
+  - E_goal_problem(目标/规划问题):action="human"(回澄清或重规划,属重大决策)
+- 同一节点归因-修复循环超过2次还失败:action="human"
+- 如果清单里没有合适的能力:action="request_capability",capability_gap 描述需求
+- reason 必须具体,说明基于进度真相里的哪些事实(含根因)做的判断
 - 用中文`;
 
 export interface SchedulerDecision {
@@ -20,6 +34,7 @@ export interface SchedulerDecision {
   reason: string;
   capability_gap: string;
   is_complete: boolean;
+  action?: "execute" | "retry_with_feedback" | "switch_node" | "request_capability" | "skip_node" | "human";
 }
 
 export async function runScheduler(
@@ -46,7 +61,7 @@ export async function runScheduler(
     "",
     progressTruth,
     "",
-    "请基于进度真相选择下一步。已验证 passed 的节点不要重复选(除非需要产新实例)。",
+    "请基于进度真相选择下一步。如果有节点 FAIL 带根因,按根因路由到对应修复动作(action)。已验证 passed 的节点不要重复选(除非需要产新实例)。",
   ].join("\n");
 
   return client.completeJson<SchedulerDecision>("composer", SCHEDULER_SYSTEM, userPrompt);

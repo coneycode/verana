@@ -79,9 +79,9 @@ export function buildSmartFakeClient(): FakeLlmClient {
     if (role === "composer" && system.includes("调度大脑")) {
       schedCount++;
       if (schedCount <= 2) {
-        return { json: { next_node: "write_chapter", reason: "继续写下一章", capability_gap: "", is_complete: false } };
+        return { json: { next_node: "write_chapter", reason: "继续写下一章", capability_gap: "", is_complete: false, action: "execute" } };
       }
-      return { json: { next_node: "", reason: "已写到目标章数", capability_gap: "", is_complete: true } };
+      return { json: { next_node: "", reason: "已写到目标章数", capability_gap: "", is_complete: true, action: "execute" } };
     }
 
     // 规整层

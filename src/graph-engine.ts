@@ -118,7 +118,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
 
     // 调度大脑决策 — 吃 verdict 事实,不吃 claim
     const decision = await runScheduler(client, spec, wf.blackboard, progressTruth, wf.iteration);
-    await appendEvent(solutionDir, { type: "scheduler_decision", reason: decision.reason, data: { next_node: decision.next_node, is_complete: decision.is_complete, capability_gap: decision.capability_gap } });
+    await appendEvent(solutionDir, { type: "scheduler_decision", reason: decision.reason, data: { next_node: decision.next_node, is_complete: decision.is_complete, capability_gap: decision.capability_gap, action: decision.action } });
     bus?.publish(projectEvent("node_selected", projectId, { node: decision.next_node, reason: decision.reason }));
 
     // 完成判断
@@ -131,8 +131,25 @@ export async function runGraphProject(rootDir: string, projectId: string, client
       return;
     }
 
-    // 能力缺口处理
-    if (decision.capability_gap && !decision.next_node) {
+    // action 路由(scheduler 自主决策的出口)
+    const action = decision.action ?? "execute";  // 默认 execute(向后兼容)
+    if (action === "human") {
+      wf.workflow_status = "awaiting_human";
+      wf.awaiting = "human";
+      wf.awaiting_reason = `scheduler 转人审: ${decision.reason}`;
+      wf.awaiting_scene = "failure";
+      await saveProjectState(rootDir, state);
+      bus?.publish(projectEvent("human_required", projectId, { scene: "failure", reason: wf.awaiting_reason }));
+      return;
+    }
+    if (action === "skip_node") {
+      // 跳过该非必要节点,iteration++ 继续
+      wf.iteration += 1;
+      await appendEvent(solutionDir, { type: "node_done", node: decision.next_node || "?", reason: `跳过(scheduler判定非必要)` });
+      await saveProjectState(rootDir, state);
+      continue;
+    }
+    if (action === "request_capability" || (decision.capability_gap && !decision.next_node)) {
       const review = await reviewCapabilityGap(client, spec, decision.capability_gap, wf.blackboard, decision.reason);
       if (review.reasonable && review.newNode) {
         spec.capabilities.push(review.newNode);
