@@ -38,7 +38,8 @@ export async function nextClarificationQuestion(state: ProjectState, client: Llm
   let lastRejectedQ = "";
   let lastRejectReason = "";
 
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const maxAttempts = Number(process.env.VERANA_MAX_CLARIFY_RETRY ?? 3);
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const userPrompt = buildUserPrompt(state) + (lastRejectedQ ? `\n\n【反馈】你上次返回的问题被判定为重复(${lastRejectReason}),请换一个完全不同的维度。` : "");
     const result = await client.completeJson<{ dimension?: string; question?: string; risk?: string; done?: boolean }>("composer", SYSTEM_PROMPT, userPrompt);
     if (result.done) return null;
@@ -55,7 +56,7 @@ export async function nextClarificationQuestion(state: ProjectState, client: Llm
             if (overlap.length >= 2) {
               lastRejectedQ = result.question;
               lastRejectReason = `跟已有问题共享选项词: ${overlap.join(",")}`;
-              if (attempt < 2) { continue; }
+              if (attempt < maxAttempts - 1) { continue; }
               return null;
             }
           }

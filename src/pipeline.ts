@@ -79,7 +79,7 @@ export async function planGraphWorkflow(
   const clarifications = state.status.clarifier?.clarifications ?? [];
 
   // 机械重生成循环:Composer 生成 → 硬校验 → 充分性检查 → 有问题带问题清单重生成
-  const MAX_REGEN = 3;
+  const MAX_REGEN = Number(process.env.VERANA_MAX_REGEN ?? 3);
   let lastIssues: string = "";
 
   for (let attempt = 0; attempt < MAX_REGEN; attempt++) {
@@ -121,6 +121,7 @@ interface ComposerLlmResult {
   capabilities: Array<Partial<CapabilityNode> & { id: string }>;
   guardrails: {
     max_iterations: number;
+    max_retries_per_node?: number;
     soft: Array<{ id: string; desc: string; action: string }>;
     human_checkpoint_every: number;
   };
@@ -180,7 +181,7 @@ function assembleSpec(projectId: string, rawGoal: string, r: ComposerLlmResult):
     scripts: [],
     capabilities,
     guardrails: {
-      hard: { max_iterations: r.guardrails?.max_iterations ?? 20, max_retries_per_node: 2 },
+      hard: { max_iterations: r.guardrails?.max_iterations ?? 20, max_retries_per_node: r.guardrails?.max_retries_per_node ?? 3 },
       soft: (r.guardrails?.soft ?? []).map(s => ({
         id: s.id,
         desc: s.desc,

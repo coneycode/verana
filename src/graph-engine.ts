@@ -220,7 +220,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
     if (!verdict.passed) {
       const retries = (wf.node_retries[node.id] ?? 0) + 1;
       wf.node_retries[node.id] = retries;
-      const maxRetries = spec.guardrails.hard.max_retries_per_node ?? 2;
+      const maxRetries = spec.guardrails.hard.max_retries_per_node ?? 3;
 
       // 归因:判断根因(每次 fail 都归因,不盲目重试)
       const diagnosis = await diagnoseFailure(client, {
