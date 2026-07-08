@@ -99,7 +99,7 @@ export interface EventEntry {
     | "node_selected" | "node_start" | "node_done" | "verdict"
     | "blackboard_updated" | "guardrail_hit" | "human_required"
     | "scheduler_decision" | "capability_added" | "run_created"
-    | "llm_stream";
+    | "llm_stream" | "diagnosis";
   node?: string;
   run_id?: string;
   reason?: string;          // 调度理由/护栏原因/人审原因

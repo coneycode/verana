@@ -14,10 +14,22 @@ import { appendEvent, readEvents, writeSnapshot, readLatestSnapshot, nextSeq, bu
 import { checkHardGuardrails, checkSoftGuardrails, shouldHumanCheckpoint, type GuardrailCheckResult } from "./guardrails.js";
 import { runScheduler, reviewCapabilityGap, type SchedulerDecision } from "./scheduler.js";
 import type { ExecutorAdapter } from "./executors.js";
+import { diagnoseFailure, type DiagnosisResult } from "./diagnostician.js";
 
 // 测试注入:设了就用 fake executor,不调 hermes CLI
 let injectedExecutor: ExecutorAdapter | null = null;
 export function setExecutorForTest(ea: ExecutorAdapter | null) { injectedExecutor = ea; }
+
+/** 从事件日志提取某节点的历史归因结果(供 diagnostician 看"上次按X修了没用") */
+async function getNodeDiagnoses(solutionDir: string, nodeId: string): Promise<DiagnosisResult[]> {
+  const events = await readEvents(solutionDir, 0);
+  return events
+    .filter(e => e.type === "diagnosis" && e.node === nodeId)
+    .map(e => ({
+      root_cause: (e.data?.root_cause as DiagnosisResult["root_cause"]) ?? "A_instruction_vague",
+      explanation: (e.data?.explanation as string) ?? "",
+    }));
+}
 
 const EXECUTOR_SYSTEM = `你是一个执行者。根据节点描述和上下文,完成指定的工作,产出交付物。
 
@@ -173,7 +185,9 @@ export async function runGraphProject(rootDir: string, projectId: string, client
     await appendEvent(solutionDir, { type: "run_created", node: node.id, run_id: runId });
     bus?.publish(projectEvent("node_selected", projectId, { node: node.id, runId, status: "running" }));
 
-    const runResult = await executeNode(rootDir, projectId, runId, node, spec, wf.blackboard, client, bus);
+    const execResult = await executeNode(rootDir, projectId, runId, node, spec, wf.blackboard, client, bus);
+    const runResult = execResult.content;
+    const instruction = execResult.instruction;
 
     // 验证
     let verdict: VerdictRecord;
@@ -189,16 +203,26 @@ export async function runGraphProject(rootDir: string, projectId: string, client
       const retries = (wf.node_retries[node.id] ?? 0) + 1;
       wf.node_retries[node.id] = retries;
       const maxRetries = spec.guardrails.hard.max_retries_per_node ?? 2;
+
+      // 归因:判断根因(每次 fail 都归因,不盲目重试)
+      const diagnosis = await diagnoseFailure(client, {
+        node, verdict, claim: runResult, deliverable: runResult, instruction,
+        blackboard: wf.blackboard, spec, failCount: retries,
+        previousDiagnoses: await getNodeDiagnoses(solutionDir, node.id),
+      });
+      await appendEvent(solutionDir, { type: "diagnosis", node: node.id, run_id: runId, reason: `根因: ${diagnosis.root_cause} — ${diagnosis.explanation.slice(0, 200)}`, data: { root_cause: diagnosis.root_cause, explanation: diagnosis.explanation, fail_count: retries } });
+      bus?.publish(projectEvent("diagnosis", projectId, { node: node.id, runId, diagnosis }));
+
       if (retries >= maxRetries) {
         wf.workflow_status = "awaiting_human";
         wf.awaiting = "human";
-        wf.awaiting_reason = `节点 ${node.id} 失败且重试耗尽 (${retries}次)。失败原因: ${verdict.reasons.join("; ").slice(0, 300)}`;
+        wf.awaiting_reason = `节点 ${node.id} 失败且重试耗尽 (${retries}次)。根因: ${diagnosis.root_cause} — ${diagnosis.explanation.slice(0, 200)}。验证理由: ${verdict.reasons.join("; ").slice(0, 200)}`;
         wf.awaiting_scene = "failure";
         await saveProjectState(rootDir, state);
-        bus?.publish(projectEvent("human_required", projectId, { scene: "failure", reason: wf.awaiting_reason, verdict }));
+        bus?.publish(projectEvent("human_required", projectId, { scene: "failure", reason: wf.awaiting_reason, verdict, diagnosis }));
         return;
       }
-      // 带反馈重跑(下一轮调度会基于进度真相决策)
+      // 带归因结果重跑(下一轮 scheduler 读到根因,自主决定路由)
       continue;
     }
 
@@ -220,7 +244,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
   }
 }
 
-async function executeNode(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, bb: Record<string, unknown>, client: LlmClient, bus?: EventBus): Promise<string> {
+async function executeNode(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, bb: Record<string, unknown>, client: LlmClient, bus?: EventBus): Promise<{ content: string; instruction: string }> {
   const dir = projectPath(rootDir, projectId);
   const runDir = join(dir, "runs", runId);
   await mkdir(runDir, { recursive: true });
@@ -296,7 +320,7 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
   }
 
   await writeFile(join(runDir, "claim.md"), `# Claim\n\nNode ${node.id} (${node.kind}).\n\n${content.slice(0, 200)}...`, "utf8");
-  return content;
+  return { content, instruction: promptParts.join("\n") };
 }
 
 /** 轻节点交叉验证:生成模型出结果 → evaluator 独立判一次 → 不一致转人审 */

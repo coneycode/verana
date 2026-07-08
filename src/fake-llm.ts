@@ -84,6 +84,10 @@ export function buildSmartFakeClient(): FakeLlmClient {
       return { json: { next_node: "", reason: "已写到目标章数", capability_gap: "", is_complete: true } };
     }
 
+    // Diagnostician(归因者)
+    if (role === "evaluator" && system.includes("归因者")) {
+      return { json: { root_cause: "A_instruction_vague", explanation: "指令不够具体,executor 自由发挥偏了" } };
+    }
     // Cross check(轻节点交叉验证)
     if (role === "evaluator" && system.includes("语义重复检测器")) {
       return { json: { duplicate: false, reason: "不重复" } };

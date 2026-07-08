@@ -82,19 +82,25 @@ function asYaml(obj: Record<string, unknown>, indent = 0): string {
  */
 export async function buildProgressTruth(solutionDir: string, recentN = 6, foldThreshold = 10): Promise<string> {
   const events = await readEvents(solutionDir, 0);
-  // 提取 verdict 事件,构成"已验证的执行轨迹"
+  // 提取 verdict + diagnosis 事件,构成"已验证的执行轨迹"
   const verdictEvents = events.filter(e => e.type === "verdict");
+  const diagnosisEvents = events.filter(e => e.type === "diagnosis");
   if (verdictEvents.length === 0) {
     return "【进度真相】(尚无已验证节点,这是第一步)";
   }
 
-  // 构建轨迹条目:每条 = {node, runId, passed, reason}
-  const trail: Array<{ node: string; runId: string; passed: boolean; reason: string }> = [];
+  // 构建轨迹条目:每条 = {node, runId, passed, reason, rootCause}
+  const trail: Array<{ node: string; runId: string; passed: boolean; reason: string; rootCause?: string }> = [];
   for (const e of verdictEvents) {
     const passed = e.data?.passed === true || e.data?.passed === "true";
     const runId = e.run_id ?? e.data?.run_id ?? "?";
     const reason = (e.reason ?? "").slice(0, 80);
-    trail.push({ node: e.node ?? "?", runId: String(runId), passed, reason });
+    // 查对应的归因(同 run_id)
+    const diag = diagnosisEvents.find(d => d.run_id === e.run_id);
+    trail.push({
+      node: e.node ?? "?", runId: String(runId), passed, reason,
+      rootCause: diag ? `${diag.data?.root_cause}: ${(diag.data?.explanation as string ?? "").slice(0, 60)}` : undefined,
+    });
   }
 
   // 计算各节点通过次数(进度信号)
@@ -122,7 +128,8 @@ export async function buildProgressTruth(solutionDir: string, recentN = 6, foldT
   if (recent.length > 0) {
     lines.push("近期明细:");
     for (const t of recent) {
-      lines.push(`  - ${t.node} (${t.runId}) ${t.passed ? "passed" : "FAILED"} — ${t.reason}`);
+      const rc = t.rootCause ? ` [根因:${t.rootCause}]` : "";
+      lines.push(`  - ${t.node} (${t.runId}) ${t.passed ? "passed" : "FAILED"} — ${t.reason}${rc}`);
     }
   }
 
