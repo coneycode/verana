@@ -713,19 +713,19 @@ verifier 主力 command/tests + anti-cheat、workdir git 隔离 + 每节点 diff
 
 完备体系升级(0.5 节,2026-07-07 锁定,统领 2-13):
 事前保证:
-- [x] 澄清编译结构化输入(硬约束/软引导分离,LLM 标注+人审可调)—— 已实现基础澄清+维度去重,硬软分离待建
-- [ ] 规划充分性检查(独立检查器:路径完备/指令具体/验收对齐)—— 待建
-- [ ] planGraphWorkflow 机械重生成循环 —— 待建
-- [ ] plan_review 人可编辑 spec(改节点/checks/硬软标注)—— 待建
+- [x] 澄清编译结构化输入(硬约束/软引导分离,LLM 标注+人审可调)—— 已实现
+- [x] 规划充分性检查(独立检查器:路径完备/指令具体/验收对齐)—— 已实现
+- [x] planGraphWorkflow 机械重生成循环 —— 已实现
+- [x] plan_review 人可编辑 spec(改节点/checks/硬软标注)—— 已实现
 事后归因:
 - [x] 进度真相层(scheduler 吃 verdict 不吃 claim,buildProgressTruth 机械折叠)—— 已实现
 - [x] 重节点走 hermes CLI(带 web 工具)+ 执行过程实时流 —— 已实现
 - [x] 人审 failure 场景展示原因+最近产出+重试 —— 已实现
-- [ ] diagnostician 归因环节(五类根因)—— 待建(核心)
-- [ ] 指令组装五要素(desc+checks+软引导+上下文+失败反馈)—— 待建
-- [ ] 规整层(claim→deliverable,轻 LLM 清洗)—— 待建
-- [ ] scheduler 路由(五类根因→修复动作,高频自动/低频人审)—— 待建
-- [ ] verifier 判 deliverable(非 claim),轻节点不一致也走归因 —— 待建
+- [x] diagnostician 归因环节(五类根因)—— 已实现
+- [x] 指令组装五要素(desc+checks+软引导+上下文+失败反馈)—— 已实现
+- [x] 规整层(claim→deliverable,轻 LLM 清洗)—— 已实现
+- [x] scheduler 路由(五类根因→修复动作,高频自动/低频人审)—— 已实现
+- [x] verifier 判 deliverable(非 claim),轻节点不一致也走归因 —— 已实现
 
 ---
 
