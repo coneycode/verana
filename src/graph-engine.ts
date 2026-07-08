@@ -358,6 +358,9 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     await appendFile(streamPath, `\n## 规整后产出(deliverable)\n\n${deliverable}\n`, "utf8");
   }
 
+  // deliverable 写到固定路径(供 verifier 读,即使没有 outputs)
+  await writeFile(join(runDir, "deliverable.md"), deliverable, "utf8");
+
   // 落盘用 deliverable(纯净产出)
   for (const output of node.outputs ?? []) {
     const outPath = join(dir, output.path);
@@ -421,12 +424,22 @@ async function verifyAgentNode(rootDir: string, projectId: string, runId: string
   const streamPath = join(runDir, "stream.md");
 
   const outputContents: string[] = [];
+  // 优先从 node.outputs 读(规整后的 deliverable 落盘)
   for (const output of node.outputs ?? []) {
     const targetPath = output.path.endsWith("/") ? join(output.path, "content.md") : output.path;
     try {
       outputContents.push(`\n--- ${output.path} ---\n${await readFile(join(dir, targetPath), "utf8")}`);
     } catch {
       outputContents.push(`\n--- ${output.path} ---\n(文件不存在)`);
+    }
+  }
+  // 兜底:如果没有 outputs 或 outputs 读不到,从 deliverable.md 读(规整后的纯净产出)
+  if (outputContents.length === 0 || outputContents.every(c => c.includes("(文件不存在)"))) {
+    try {
+      const deliverable = await readFile(join(runDir, "deliverable.md"), "utf8");
+      outputContents.push(`\n--- deliverable ---\n${deliverable}`);
+    } catch {
+      outputContents.push("\n--- deliverable ---\n(文件不存在)");
     }
   }
 
