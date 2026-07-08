@@ -277,11 +277,14 @@ function renderMain() {
 
   // --- Plan review (图模型:展示能力清单+护栏+blackboard schema) ---
   if (phase === 'plan_review') {
-    el.innerHTML = '<div class="guide"><div class="guide-title">审核能力与护栏</div><div class="guide-desc">系统已规划图工作流。预定义的是能力清单(节点)+护栏+记忆结构,执行路径由调度大脑运行时动态决定。请审核后通过。</div><div class="row"><button class="good" id="approvePlanBtn">通过,开始执行</button><button class="bad" id="showRejectPlanBtn">打回重规划</button></div><div id="rejectPlanPanel" style="display:none;margin-top:8px"><textarea id="rejectPlanNote" placeholder="具体打回要求:哪些能力缺失/多余、护栏不合理、记忆结构有问题"></textarea><button class="bad" id="rejectPlanBtn" style="margin-top:6px">确认打回</button></div></div>'+
+    el.innerHTML = '<div class="guide"><div class="guide-title">审核能力与护栏</div><div class="guide-desc">系统已规划图工作流。预定义的是能力清单(节点)+护栏+记忆结构,执行路径由调度大脑运行时动态决定。可编辑 spec 后通过。</div><div class="row"><button class="good" id="approvePlanBtn">通过,开始执行</button><button class="secondary" id="editSpecBtn">编辑 Spec</button><button class="bad" id="showRejectPlanBtn">打回重规划</button></div><div id="rejectPlanPanel" style="display:none;margin-top:8px"><textarea id="rejectPlanNote" placeholder="具体打回要求:哪些能力缺失/多余、护栏不合理、记忆结构有问题"></textarea><button class="bad" id="rejectPlanBtn" style="margin-top:6px">确认打回</button></div><div id="specEditPanel" style="display:none;margin-top:8px"><div class="muted" style="margin-bottom:4px">编辑 spec(JSON 格式,保存前会校验):</div><textarea id="specEditArea" style="min-height:300px;font-family:monospace;font-size:12px"></textarea><div class="row" style="margin-top:6px"><button class="good" id="saveSpecBtn">保存</button><button class="bad" id="cancelSpecBtn">取消</button></div></div></div>'+
       '<div id="planOverview"></div>';
     $('approvePlanBtn').onclick = () => doApprove('plan_review');
     $('showRejectPlanBtn').onclick = () => { $('rejectPlanPanel').style.display='block'; $('rejectPlanNote').focus(); };
     $('rejectPlanBtn').onclick = () => doReject('plan_review');
+    $('editSpecBtn').onclick = () => loadSpecForEdit();
+    $('saveSpecBtn').onclick = () => doSaveSpec();
+    $('cancelSpecBtn').onclick = () => { $('specEditPanel').style.display='none'; };
     renderPlanOverview('planOverview');
     return;
   }
@@ -579,6 +582,40 @@ async function doPlan() {
   setBusy(true);
   try { await post('/projects/'+selectedId+'/plan', {}); await refresh(); }
   catch(e) { alert(e.message); }
+  setBusy(false);
+}
+
+async function loadSpecForEdit() {
+  const panel = $('specEditArea');
+  if (!panel) return;
+  try {
+    const spec = await fetch('/projects/'+selectedId+'/workflow').then(r => r.json());
+    panel.value = JSON.stringify(spec, null, 2);
+    $('specEditPanel').style.display = 'block';
+    panel.focus();
+  } catch(e) { alert('加载 spec 失败: ' + e.message); }
+}
+
+async function doSaveSpec() {
+  setBusy(true);
+  try {
+    const spec = JSON.parse($('specEditArea').value);
+    const res = await fetch('/projects/'+selectedId+'/workflow', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(spec),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: 'HTTP ' + res.status }));
+      throw new Error(err.message || err.error || 'HTTP ' + res.status);
+    }
+    $('specEditPanel').style.display = 'none';
+    workflowSpec = spec;
+    await refresh();
+    renderPlanOverview('planOverview');
+  } catch(e) {
+    alert('保存失败: ' + e.message);
+  }
   setBusy(false);
 }
 

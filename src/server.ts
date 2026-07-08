@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import type { FastifyInstance } from "fastify";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse } from "yaml";
 
@@ -10,6 +10,7 @@ import { HttpLlmClient, loadConfig, type LlmClient } from "./llm.js";
 import { approveGate, deleteProject, getProject, listProjects, projectPath, rejectGate, saveProjectState } from "./project-store.js";
 import { composeGraphWorkflow, planGraphWorkflow } from "./pipeline.js";
 import { runGraphProject, applyHumanVerdict } from "./graph-engine.js";
+import { validateGraphWorkflow } from "./workflow-validator.js";
 import { renderHomePage } from "./web.js";
 import type { GraphWorkflowSpec } from "./types.js";
 
@@ -146,6 +147,18 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     const wfPath = join(projectPath(options.rootDir, request.params.id), "solution", "workflow.yaml");
     const raw = await readFile(wfPath, "utf8");
     return parse(raw);
+  });
+
+  // 人审编辑 spec(改节点/checks/硬软约束)
+  app.put<{ Params: { id: string } }>("/projects/:id/workflow", async (request) => {
+    const wfPath = join(projectPath(options.rootDir, request.params.id), "solution", "workflow.yaml");
+    const spec = request.body as GraphWorkflowSpec;
+    // 硬校验编辑后的 spec
+    const validation = validateGraphWorkflow(spec);
+    if (!validation.passed) throw new Error(`Edited workflow failed validation: ${validation.errors.join("; ")}`);
+    await writeFile(wfPath, JSON.stringify(spec, null, 2), "utf8");
+    bus.publish(projectEvent("workflow_edited", request.params.id, { reason: "人审编辑 spec" }));
+    return { ok: true };
   });
 
   app.get<{ Params: { id: string } }>("/projects/:id/deliverables", async (request) => {
