@@ -5,6 +5,7 @@ import type { LlmClient } from "./llm.js";
 import { getProject, projectPath, saveProjectState, writeYaml } from "./project-store.js";
 import type { CapabilityNode, GraphWorkflowSpec, GraphRuntime } from "./types.js";
 import { validateGraphWorkflow } from "./workflow-validator.js";
+import { checkSufficiency } from "./sufficiency-checker.js";
 
 // 重导出图执行引擎
 export { runGraphProject, readGraphSpec, applyHumanVerdict } from "./graph-engine.js";
@@ -77,13 +78,38 @@ export async function planGraphWorkflow(
   const goal = state.project.goal;
   const clarifications = state.status.clarifier?.clarifications ?? [];
 
+  // 机械重生成循环:Composer 生成 → 硬校验 → 充分性检查 → 有问题带问题清单重生成
+  const MAX_REGEN = 3;
+  let lastIssues: string = "";
+
+  for (let attempt = 0; attempt < MAX_REGEN; attempt++) {
+    const userPrompt = buildComposerPrompt(goal, clarifications) + (lastIssues ? `\n\n【上轮问题清单(请修复)】\n${lastIssues}` : "");
+    const llmResult = await client.completeJson<ComposerLlmResult>("composer", COMPOSER_SYSTEM, userPrompt);
+
+    const spec = assembleSpec(projectId, goal, llmResult);
+    const validation = validateGraphWorkflow(spec);
+    if (!validation.passed) {
+      lastIssues = validation.errors.map(e => `[硬校验] ${e}`).join("\n");
+      if (attempt < MAX_REGEN - 1) continue;
+      throw new Error(`Generated workflow failed hard checks after ${MAX_REGEN} attempts: ${validation.errors.join("; ")}`);
+    }
+
+    // 充分性检查(独立 evaluator,三层审查)
+    const sufficiency = await checkSufficiency(client, spec);
+    const errors = sufficiency.issues.filter(i => i.severity === "error");
+    if (errors.length === 0) {
+      // 通过!落盘
+      return composeGraphWorkflow(rootDir, projectId, client, spec);
+    }
+
+    // 有问题,带问题清单重生成
+    lastIssues = errors.map(i => `[${i.layer}] ${i.node_id ? `节点${i.node_id}: ` : ""}${i.description}`).join("\n");
+  }
+
+  // 循环用尽,最后兜底:用最后一次的 spec(即使有 warning)落盘
   const userPrompt = buildComposerPrompt(goal, clarifications);
   const llmResult = await client.completeJson<ComposerLlmResult>("composer", COMPOSER_SYSTEM, userPrompt);
-
   const spec = assembleSpec(projectId, goal, llmResult);
-  const validation = validateGraphWorkflow(spec);
-  if (!validation.passed) throw new Error(`Generated workflow failed hard checks: ${validation.errors.join("; ")}`);
-
   return composeGraphWorkflow(rootDir, projectId, client, spec);
 }
 
@@ -101,6 +127,8 @@ interface ComposerLlmResult {
   blackboard_schema: { fields: Array<{ key: string; desc: string; bounded: boolean }> };
   entry_node: string;
   completion_criteria: string[];
+  hard_constraints?: string[];
+  soft_guidance?: string[];
   agents: string[];
   required_capabilities: string[];
 }

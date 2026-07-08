@@ -84,6 +84,10 @@ export function buildSmartFakeClient(): FakeLlmClient {
       return { json: { next_node: "", reason: "已写到目标章数", capability_gap: "", is_complete: true, action: "execute" } };
     }
 
+    // 充分性检查器
+    if (role === "evaluator" && system.includes("规划充分性检查器")) {
+      return { json: { passed: true, issues: [] } };
+    }
     // 规整层
     if (role === "evaluator" && system.includes("产出规整器")) {
       return { json: { deliverable: user.slice(user.indexOf("Agent 原始输出:") + "Agent 原始输出:".length).trim(), cleaned: true } };
