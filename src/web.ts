@@ -172,12 +172,31 @@ let activeRunId = null;
 // Mermaid 初始化
 if (typeof mermaid !== 'undefined') { mermaid.initialize({ startOnLoad: false, theme: 'dark', flowchart: { curve: 'basis' } }); }
 
-// 生成能力关系图(从 inputs/outputs/updates 推断边)
+// 生成能力关系图(从 inputs/outputs/updates 推断边,节点用中文描述)
 function buildCapabilityGraph(spec) {
   if (!spec || !spec.capabilities) return '';
   const caps = spec.capabilities;
+  const edges = inferEdges(caps);
+  let lines = ['flowchart TD'];
+  // 边样式: classDef
+  lines.push('  classDef agent fill:#1a2744,stroke:#3b82f6,color:#93c5fd');
+  lines.push('  classDef light fill:#1a2a1a,stroke:#22c55e,color:#86efac');
+  lines.push('  classDef entry fill:#1a1f2e,stroke:#f59e0b,color:#fcd34d,stroke-width:2px');
+  for (const c of caps) {
+    // Mermaid 节点 ID 用英文(c.id),显示文本用中文描述
+    const desc = c.desc.slice(0, 40);
+    const shape = c.kind === 'agent' ? '["' + desc + '"]' : '(("' + desc + '"))';
+    lines.push('  ' + c.id + shape);
+    lines.push('  class ' + c.id + ' ' + (c.kind === 'agent' ? 'agent' : 'light'));
+  }
+  for (const [a, b] of edges) lines.push('  ' + a + ' --> ' + b);
+  if (spec.entry_node) lines.push('  class ' + spec.entry_node + ' entry');
+  return lines.join('\\n');
+}
+
+// 从 inputs/outputs/updates 推断节点间依赖边
+function inferEdges(caps) {
   const edges = [];
-  // 推断边:A 的 outputs/updates 匹配 B 的 inputs/ref
   for (const a of caps) {
     const aOutputs = new Set();
     (a.outputs ?? []).forEach(o => aOutputs.add(o.path));
@@ -190,16 +209,7 @@ function buildCapabilityGraph(spec) {
       }
     }
   }
-  // Mermaid flowchart 语法
-  let lines = ['flowchart TD'];
-  for (const c of caps) {
-    const shape = c.kind === 'agent' ? '[[' + c.id + '\\n' + c.desc.slice(0,30) + ']]' : '((' + c.id + '))';
-    lines.push('  ' + c.id + shape);
-  }
-  for (const [a, b] of edges) lines.push('  ' + a + ' --> ' + b);
-  // 入口节点标记
-  if (spec.entry_node) lines.push('  ' + spec.entry_node + ':::entry');
-  return lines.join('\\n');
+  return edges;
 }
 
 // 渲染 Mermaid 图到容器
@@ -207,45 +217,44 @@ async function renderMermaidGraph(containerId, graphDef) {
   const el = $(containerId);
   if (!el || !graphDef) { if (el) el.innerHTML = '<div class="muted">无图数据</div>'; return; }
   try {
-    const { svg } = await mermaid.render('graph-' + containerId, graphDef);
+    const { svg } = await mermaid.render('g' + containerId, graphDef);
     el.innerHTML = svg;
   } catch(e) {
     el.innerHTML = '<div class="muted">图渲染失败: ' + escapeHtml(e.message) + '</div><pre>' + escapeHtml(graphDef) + '</pre>';
   }
 }
 
-// 生成执行轨迹图(节点带状态色+计数器)
+// 生成执行轨迹图(节点用中文描述,带状态色+执行次数+当前节点高亮)
 function buildExecutionGraph(spec, wf) {
   if (!spec || !spec.capabilities) return '';
   const caps = spec.capabilities;
   const runs = wf?.runs ?? {};
   const retries = wf?.node_retries ?? {};
   const curNode = wf?.current_node;
+  const edges = inferEdges(caps);
   let lines = ['flowchart TD'];
+  // 状态色
+  lines.push('  classDef passed fill:#142a1a,stroke:#22c55e,color:#86efac');
+  lines.push('  classDef failed fill:#2a1414,stroke:#ef4444,color:#fca5a5');
+  lines.push('  classDef running fill:#1a1f2e,stroke:#f59e0b,color:#fcd34d,stroke-width:3px');
+  lines.push('  classDef pending fill:#0a1428,stroke:#475569,color:#64748b');
+  lines.push('  classDef agent fill:#1a2744,stroke:#3b82f6,color:#93c5fd');
   for (const c of caps) {
     const nodeRuns = runs[c.id] ?? [];
-    const passCount = nodeRuns.length;
+    const runCount = nodeRuns.length;
     const failCount = retries[c.id] ?? 0;
     const isRunning = curNode === c.id && wf?.awaiting === 'none_midstep';
-    const label = c.id + (passCount > 0 ? '\\n×' + passCount : '') + (failCount > 0 ? '\\n✗' + failCount : '');
-    lines.push('  ' + c.id + '[' + label + ']');
-    if (isRunning) lines.push('  ' + c.id + ':::running');
-    else if (passCount > 0 && failCount === 0) lines.push('  ' + c.id + ':::passed');
-    else if (failCount > 0 && passCount === 0) lines.push('  ' + c.id + ':::failed');
-  }
-  // 边(跟能力图同样的推断)
-  const edges = [];
-  for (const a of caps) {
-    const aOutputs = new Set();
-    (a.outputs ?? []).forEach(o => aOutputs.add(o.path));
-    (a.updates ?? []).forEach(u => aOutputs.add(u));
-    for (const b of caps) {
-      if (a.id === b.id) continue;
-      for (const inp of (b.inputs ?? [])) {
-        if (inp.path && aOutputs.has(inp.path)) { edges.push([a.id, b.id]); break; }
-        if (inp.ref && aOutputs.has(inp.ref)) { edges.push([a.id, b.id]); break; }
-      }
-    }
+    // 节点显示:中文描述 + 状态标记
+    let label = c.desc.slice(0, 35);
+    if (runCount > 0) label += '\\n✓' + runCount + '次';
+    if (failCount > 0) label += ' \\n✗' + failCount + '次失败';
+    if (isRunning) label += '\\n⟳ 执行中';
+    lines.push('  ' + c.id + '["' + label + '"]');
+    // 状态着色
+    if (isRunning) lines.push('  class ' + c.id + ' running');
+    else if (runCount > 0 && failCount === 0) lines.push('  class ' + c.id + ' passed');
+    else if (failCount > 0 && runCount === 0) lines.push('  class ' + c.id + ' failed');
+    else lines.push('  class ' + c.id + ' pending');
   }
   for (const [a, b] of edges) lines.push('  ' + a + ' --> ' + b);
   return lines.join('\\n');
