@@ -282,6 +282,7 @@ async function loadProjects() {
 
 async function selectProject(id) {
   selectedId = id;
+  if (id) location.hash = id; else history.replaceState(null, '', '#');
   workflowSpec = null;
   selectedTaskId = null;
   streamContent = '';
@@ -864,7 +865,11 @@ function stripDim(s) { return String(s).replace(/^\[.+?\]\s*/, ''); }
 ${MD_RENDERER_JS}
 
 $('createBtn').onclick = async () => { const goal = $('goal').value.trim(); if (!goal) return; setBusy(true); try { const created = await post('/projects', { goal }); selectedId = created.project.id; $('goal').value=''; await loadProjects(); await selectProject(selectedId); } catch(e) { alert(e.message); } setBusy(false); };
-loadProjects();
+loadProjects().then(() => {
+  // 从 URL hash 恢复选中的项目(刷新后保持原界面)
+  const hashId = decodeURIComponent(location.hash.slice(1));
+  if (hashId) selectProject(hashId);
+});
 </script>
 </body>
 </html>`;
