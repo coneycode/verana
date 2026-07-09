@@ -512,14 +512,18 @@ function renderTimelineBlocks(containerId) {
         html += '<div style="color:#a78bfa;font-size:13px;margin-bottom:4px">🔬 归因: '+escapeHtml(b.diagnosis.root_cause)+' — '+escapeHtml((b.diagnosis.explanation||'').slice(0,80))+'</div>';
       }
       if (b.llmOutput && isRunning) {
-        // 实时输出自动滚到底
-        html += '<script>setTimeout(function(){var e=document.querySelectorAll(".tl-llm");if(e.length){e[e.length-1].scrollTop=e[e.length-1].scrollHeight}},50)</script>';
+        // 实时输出自动滚到底(在 renderTimelineBlocks 末尾统一处理)
       }
       html += '</div>';
     }
     html += '</div>';
   }
   el.innerHTML = html;
+  // 自动滚动正在执行的 LLM 输出到底
+  setTimeout(() => {
+    const llms = el.querySelectorAll('.tl-llm');
+    if (llms.length) llms[llms.length - 1].scrollTop = llms[llms.length - 1].scrollHeight;
+  }, 10);
 }
 
 function toggleBlock(i) {
