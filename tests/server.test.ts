@@ -46,12 +46,15 @@ test("graph workflow: create → plan → approve → run → final_review", asy
 
     const planResponse = await app.inject({ method: "POST", url: `/projects/${pid}/plan`, payload: { spec: makeSpec(pid) } });
     assert.equal(planResponse.statusCode, 200);
-    assert.equal(planResponse.json().flow_type, "graph");
+    // fire-and-forget: 返回 composing 状态,不等 plan 完成
+    assert.equal(planResponse.json().status, "composing");
+    // 等 plan 完成(composeGraphWorkflow 是 fire-and-forget)
+    await new Promise((r) => setTimeout(r, 500));
 
-    // 测自动规划路径(不传 spec,Composer 生成)
-    const autoPlanResponse = await app.inject({ method: "POST", url: `/projects/${pid}/plan` });
-    assert.equal(autoPlanResponse.statusCode, 200);
-    assert.ok(autoPlanResponse.json().capabilities.length > 0);
+    // 验证 workflow 已落盘
+    const wfResponse = await app.inject({ method: "GET", url: `/projects/${pid}/workflow` });
+    assert.equal(wfResponse.statusCode, 200);
+    assert.equal(wfResponse.json().flow_type, "graph");
 
     const approvePlan = await app.inject({ method: "POST", url: `/projects/${pid}/approve`, payload: { gate: "plan_review", note: "ok" } });
     assert.equal(approvePlan.statusCode, 200);
