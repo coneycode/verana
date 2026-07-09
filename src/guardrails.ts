@@ -33,14 +33,19 @@ export async function checkSoftGuardrails(
 ): Promise<GuardrailCheckResult> {
   if (spec.guardrails.soft.length === 0) return { hit: false };
 
-  const SOFT_SYSTEM = `你是一个安全护栏检查者。判断即将执行的操作是否触碰预设的红线。
+  const SOFT_SYSTEM = `你是一个安全护栏检查者。你的职责是判断即将执行的操作是否触碰安全红线。
+
+安全红线 = 不可逆操作、合规问题、严重偏离原始目标。不是内容质量。
 
 返回 JSON:
 {"hit": true/false, "which": "红线id(命中时)", "reason": "为什么碰线"}
 
 规则:
-- 只检查给定的红线清单,不要编造
-- hit=true 仅当即将执行的操作明确触碰某条红线
+- 只检查给定的红线清单,不要编造新的红线
+- hit=true 仅当即将执行的操作明确触碰某条安全红线
+- **不要判断内容质量、完整性、准确性**——那是 verifier 的职责,不是你的
+- "内容有'待补'"、"信息不完整"、"设定不全面"等是内容质量问题,不是安全红线,不要 hit
+- 只有"要删文件""要对外发布""要执行危险命令""严重偏离目标方向"才是安全红线
 - 用中文`;
 
   const rules = spec.guardrails.soft.map(s => `- ${s.id}: ${s.desc}`).join("\n");
