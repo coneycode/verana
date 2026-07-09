@@ -641,7 +641,9 @@ async function doRun() {
   try {
     await post('/projects/'+selectedId+'/run');
     setBusy(false);
-    await refresh();
+    // 后端 run 是 fire-and-forget,status 改了但可能还没发 SSE,延迟 refresh 确保拿到 executing 状态
+    setTimeout(() => { refresh(); }, 1000);
+    setTimeout(() => { refresh(); }, 3000);
   } catch(e) { alert(e.message); setBusy(false); }
 }
 
