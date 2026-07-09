@@ -133,6 +133,11 @@ export function renderHomePage(): string {
     .live-feed .llm-line { color:#dbeafe; padding:0; white-space:pre-wrap; word-break:break-word; }
     .live-feed .meta-line { color:var(--muted); padding:2px 0; }
     .live-feed .feed-ts { color:#475569; font-size:11px; margin-right:6px; }
+    .mermaid { background:#0a1428; border-radius:8px; padding:12px; }
+    .mermaid .node.passed { fill:#142a1a !important; stroke:#22c55e !important; }
+    .mermaid .node.failed { fill:#2a1414 !important; stroke:#ef4444 !important; }
+    .mermaid .node.running { fill:#1a1f2e !important; stroke:#f59e0b !important; stroke-width:2px !important; }
+    .mermaid .node.entry { stroke:#3b82f6 !important; stroke-width:2px !important; }
   </style>
 </head>
 <body>
@@ -155,6 +160,7 @@ export function renderHomePage(): string {
       </div>
     </section>
   </main>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <script>
 let selectedId = null;
 let state = null;
@@ -162,6 +168,88 @@ let source = null;
 let busy = false;
 let workflowSpec = null;
 let activeRunId = null;
+
+// Mermaid 初始化
+if (typeof mermaid !== 'undefined') { mermaid.initialize({ startOnLoad: false, theme: 'dark', flowchart: { curve: 'basis' } }); }
+
+// 生成能力关系图(从 inputs/outputs/updates 推断边)
+function buildCapabilityGraph(spec) {
+  if (!spec || !spec.capabilities) return '';
+  const caps = spec.capabilities;
+  const edges = [];
+  // 推断边:A 的 outputs/updates 匹配 B 的 inputs/ref
+  for (const a of caps) {
+    const aOutputs = new Set();
+    (a.outputs ?? []).forEach(o => aOutputs.add(o.path));
+    (a.updates ?? []).forEach(u => aOutputs.add(u));
+    for (const b of caps) {
+      if (a.id === b.id) continue;
+      for (const inp of (b.inputs ?? [])) {
+        if (inp.path && aOutputs.has(inp.path)) { edges.push([a.id, b.id]); break; }
+        if (inp.ref && aOutputs.has(inp.ref)) { edges.push([a.id, b.id]); break; }
+      }
+    }
+  }
+  // Mermaid flowchart 语法
+  let lines = ['flowchart TD'];
+  for (const c of caps) {
+    const shape = c.kind === 'agent' ? '[[' + c.id + '\\n' + c.desc.slice(0,30) + ']]' : '((' + c.id + '))';
+    lines.push('  ' + c.id + shape);
+  }
+  for (const [a, b] of edges) lines.push('  ' + a + ' --> ' + b);
+  // 入口节点标记
+  if (spec.entry_node) lines.push('  ' + spec.entry_node + ':::entry');
+  return lines.join('\\n');
+}
+
+// 渲染 Mermaid 图到容器
+async function renderMermaidGraph(containerId, graphDef) {
+  const el = $(containerId);
+  if (!el || !graphDef) { if (el) el.innerHTML = '<div class="muted">无图数据</div>'; return; }
+  try {
+    const { svg } = await mermaid.render('graph-' + containerId, graphDef);
+    el.innerHTML = svg;
+  } catch(e) {
+    el.innerHTML = '<div class="muted">图渲染失败: ' + escapeHtml(e.message) + '</div><pre>' + escapeHtml(graphDef) + '</pre>';
+  }
+}
+
+// 生成执行轨迹图(节点带状态色+计数器)
+function buildExecutionGraph(spec, wf) {
+  if (!spec || !spec.capabilities) return '';
+  const caps = spec.capabilities;
+  const runs = wf?.runs ?? {};
+  const retries = wf?.node_retries ?? {};
+  const curNode = wf?.current_node;
+  let lines = ['flowchart TD'];
+  for (const c of caps) {
+    const nodeRuns = runs[c.id] ?? [];
+    const passCount = nodeRuns.length;
+    const failCount = retries[c.id] ?? 0;
+    const isRunning = curNode === c.id && wf?.awaiting === 'none_midstep';
+    const label = c.id + (passCount > 0 ? '\\n×' + passCount : '') + (failCount > 0 ? '\\n✗' + failCount : '');
+    lines.push('  ' + c.id + '[' + label + ']');
+    if (isRunning) lines.push('  ' + c.id + ':::running');
+    else if (passCount > 0 && failCount === 0) lines.push('  ' + c.id + ':::passed');
+    else if (failCount > 0 && passCount === 0) lines.push('  ' + c.id + ':::failed');
+  }
+  // 边(跟能力图同样的推断)
+  const edges = [];
+  for (const a of caps) {
+    const aOutputs = new Set();
+    (a.outputs ?? []).forEach(o => aOutputs.add(o.path));
+    (a.updates ?? []).forEach(u => aOutputs.add(u));
+    for (const b of caps) {
+      if (a.id === b.id) continue;
+      for (const inp of (b.inputs ?? [])) {
+        if (inp.path && aOutputs.has(inp.path)) { edges.push([a.id, b.id]); break; }
+        if (inp.ref && aOutputs.has(inp.ref)) { edges.push([a.id, b.id]); break; }
+      }
+    }
+  }
+  for (const [a, b] of edges) lines.push('  ' + a + ' --> ' + b);
+  return lines.join('\\n');
+}
 let selectedTaskId = null;
 let streamContent = '';
 let liveFeed = [];   // 执行阶段实时事件流:每条 {type, text, ts}
@@ -232,7 +320,15 @@ function render() {
   // executing/awaiting_human 阶段:主区域已建立 liveFeed,preserveMode=true 时不重绘(避免丢实时流)
   const phase = getPhase();
   const preserve = (phase === 'executing' || phase === 'awaiting_human') && $('liveFeedBox');
-  if (!preserve) renderMain();
+  if (!preserve) {
+    renderMain();
+  } else {
+    // preserve 模式:只更新执行轨迹图(节点状态变了),不重绘整个 mainArea
+    if (phase === 'executing' && $('execGraph')) {
+      const wf = state?.status?.workflows?.solution;
+      renderMermaidGraph('execGraph', buildExecutionGraph(workflowSpec, wf));
+    }
+  }
 }
 
 function renderSteps() {
@@ -278,7 +374,7 @@ function renderMain() {
   // --- Plan review (图模型:展示能力清单+护栏+blackboard schema) ---
   if (phase === 'plan_review') {
     el.innerHTML = '<div class="guide"><div class="guide-title">审核能力与护栏</div><div class="guide-desc">系统已规划图工作流。预定义的是能力清单(节点)+护栏+记忆结构,执行路径由调度大脑运行时动态决定。可编辑 spec 后通过。</div><div class="row"><button class="good" id="approvePlanBtn">通过,开始执行</button><button class="secondary" id="editSpecBtn">编辑 Spec</button><button class="bad" id="showRejectPlanBtn">打回重规划</button></div><div id="rejectPlanPanel" style="display:none;margin-top:8px"><textarea id="rejectPlanNote" placeholder="具体打回要求:哪些能力缺失/多余、护栏不合理、记忆结构有问题"></textarea><button class="bad" id="rejectPlanBtn" style="margin-top:6px">确认打回</button></div><div id="specEditPanel" style="display:none;margin-top:8px"><div class="muted" style="margin-bottom:4px">编辑 spec(JSON 格式,保存前会校验):</div><textarea id="specEditArea" style="min-height:300px;font-family:monospace;font-size:12px"></textarea><div class="row" style="margin-top:6px"><button class="good" id="saveSpecBtn">保存</button><button class="bad" id="cancelSpecBtn">取消</button></div></div></div>'+
-      '<div id="planOverview"></div>';
+      '<div id="planOverview"></div><div id="capGraph" style="margin-top:12px"></div>';
     $('approvePlanBtn').onclick = () => doApprove('plan_review');
     $('showRejectPlanBtn').onclick = () => { $('rejectPlanPanel').style.display='block'; $('rejectPlanNote').focus(); };
     $('rejectPlanBtn').onclick = () => doReject('plan_review');
@@ -286,6 +382,9 @@ function renderMain() {
     $('saveSpecBtn').onclick = () => doSaveSpec();
     $('cancelSpecBtn').onclick = () => { $('specEditPanel').style.display='none'; };
     renderPlanOverview('planOverview');
+    // 能力关系图
+    const graphDef = buildCapabilityGraph(workflowSpec);
+    renderMermaidGraph('capGraph', graphDef);
     return;
   }
 
@@ -295,12 +394,16 @@ function renderMain() {
     const iter = wf?.iteration ?? 0;
     const curNode = wf?.current_node ?? '-';
     el.innerHTML = '<div class="guide"><div class="guide-title">执行中(图引擎)</div><div class="guide-desc">调度大脑每步从能力清单选节点执行,带理由留痕。轮次: '+iter+' | 当前节点: '+escapeHtml(curNode)+'</div><div class="row"><button class="secondary" id="runContinueBtn">继续/刷新</button></div></div>'+
+      '<div id="execGraph" style="margin-bottom:12px"></div>'+
       '<div class="exec-layout"><div class="exec-left" id="execTimeline"></div><div class="exec-right" id="execStreamArea"></div></div>'+
       '<div id="blackboardPanel" style="margin-top:12px"></div>';
     $('runContinueBtn').onclick = () => doRun();
     renderTimeline('execTimeline');
     renderLiveStream('execStreamArea');
     renderBlackboard('blackboardPanel');
+    // 执行轨迹图(节点带状态色+计数器)
+    const execGraphDef = buildExecutionGraph(workflowSpec, wf);
+    renderMermaidGraph('execGraph', execGraphDef);
     return;
   }
 
