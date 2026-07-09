@@ -67,6 +67,9 @@ export async function runGraphProject(rootDir: string, projectId: string, client
     throw new Error(`Workflow not executable from ${wf.workflow_status}`);
   }
 
+  // 立刻通知前端:执行开始(不等第一个 scheduler 事件)
+  bus?.publish(projectEvent("status_changed", projectId, { status: "executing", node: wf.current_node ?? "", iteration: wf.iteration }));
+
   const dir = projectPath(rootDir, projectId);
   const solutionDir = join(dir, "solution");
   const spec = await readGraphSpec(rootDir, projectId);

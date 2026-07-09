@@ -641,9 +641,8 @@ async function doRun() {
   try {
     await post('/projects/'+selectedId+'/run');
     setBusy(false);
-    // 后端 run 是 fire-and-forget,status 改了但可能还没发 SSE,延迟 refresh 确保拿到 executing 状态
-    setTimeout(() => { refresh(); }, 1000);
-    setTimeout(() => { refresh(); }, 3000);
+    // 不需要延迟 refresh — 后端 runGraphProject 开始时发 status_changed SSE,
+    // SSE handler 收到后自动 refresh,创建 liveFeedBox
   } catch(e) { alert(e.message); setBusy(false); }
 }
 
