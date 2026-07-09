@@ -106,6 +106,7 @@ export function renderHomePage(): string {
     .step { flex:1; min-width:80px; padding:8px 6px; text-align:center; font-size:11px; color:var(--muted); border-bottom:3px solid #26344f; }
     .step.done { color:var(--ok); border-bottom-color:var(--ok); }
     .step.active { color:var(--accent); border-bottom-color:var(--accent); font-weight:700; }
+    .step.viewing { color:#c4b5fd; border-bottom-color:#a78bfa; font-weight:700; cursor:pointer; }
     .step-num { display:inline-block; width:18px; height:18px; line-height:18px; border-radius:50%; background:#1e293b; border:1px solid #334155; margin-right:3px; font-size:10px; }
     .step.done .step-num { background:#052e16; border-color:var(--ok); }
     .step.active .step-num { background:#0c4a6e; border-color:var(--accent); }
@@ -243,6 +244,9 @@ let timelineBlocks = [];
 
 const $ = (id) => document.getElementById(id);
 
+// 当前查看的阶段(null=跟随实际 phase,非null=回顾指定阶段)
+let viewMode = null;
+
 const STEPS = [
   { key: 'created', label: '创建', n: 1 },
   { key: 'clarifying', label: '澄清', n: 2 },
@@ -275,6 +279,7 @@ async function selectProject(id) {
   streamContent = '';
   liveFeed = [];
   timelineBlocks = [];
+  viewMode = null;
   currentStreamRunId = null;
   $('empty').style.display='none';
   $('detail').style.display='block';
@@ -320,16 +325,96 @@ function renderSteps() {
   const idx = order.indexOf(phase);
   $('steps').innerHTML = STEPS.map((s, i) => {
     let cls = '';
-    if (idx === -1) cls = i === 0 ? 'done' : '';
-    else if (i < idx) cls = 'done';
-    else if (i === idx) cls = 'active';
-    return '<div class="step '+cls+'"><span class="step-num">'+s.n+'</span>'+s.label+'</div>';
+    let clickable = false;
+    if (idx === -1) { cls = i === 0 ? 'done' : ''; clickable = i === 0; }
+    else if (i < idx) { cls = 'done'; clickable = true; }
+    else if (i === idx) { cls = 'active'; clickable = false; }
+    // viewMode 高亮
+    if (viewMode === s.key) cls = 'viewing';
+    const clickAttr = clickable ? ' style="cursor:pointer" onclick="setViewMode(\''+s.key+'\')"' : '';
+    return '<div class="step '+cls+'"'+clickAttr+'><span class="step-num">'+s.n+'</span>'+s.label+'</div>';
   }).join('');
+}
+
+function setViewMode(mode) {
+  if (viewMode === mode) { viewMode = null; } // 再点一次取消
+  else { viewMode = mode; }
+  renderSteps();
+  renderMain();
+}
+
+// 回顾模式:展示之前阶段的内容(只读)+ 从此阶段重跑按钮
+function renderViewMode(el, mode) {
+  const phase = getPhase();
+  let html = '<div class="guide"><div class="guide-title">回顾: ' + escapeHtml(STEPS.find(s => s.key === mode)?.label || mode) + '</div>';
+  // 从此阶段重跑(只在非当前阶段时显示)
+  html += '<div class="row" style="margin:8px 0"><button class="secondary" onclick="doRerunFrom(\''+mode+'\')">从此阶段重跑</button> <button class="bad" onclick="setViewMode(\''+mode+'\')">返回当前</button></div>';
+
+  if (mode === 'created' || mode === 'clarifying') {
+    const entries = state.status.clarifier?.clarifications ?? [];
+    const goal = state.project?.goal || '';
+    html += '<div class="guide-desc">目标: '+escapeHtml(goal)+'</div>';
+    if (entries.length > 0) {
+      html += '<div class="section-title" style="margin-top:8px">已澄清记录</div>';
+      for (const e of entries) {
+        html += '<div class="qa-item"><div class="qa-q">Q: '+escapeHtml(e.q)+'</div><div class="qa-a">A: '+escapeHtml(e.a)+'</div></div>';
+      }
+    } else { html += '<div class="muted">无澄清记录</div>'; }
+  } else if (mode === 'composing' || mode === 'plan_review') {
+    // 展示 spec(能力清单+硬约束+软引导)
+    if (workflowSpec) {
+      html += '<div class="section-title">能力清单</div>';
+      for (const c of workflowSpec.capabilities || []) {
+        html += '<div class="qa-item"><div class="qa-q">['+c.kind+'] '+escapeHtml(c.desc)+'</div>';
+        if (c.checks?.length) html += '<div class="qa-a">验收: '+c.checks.map(ch => escapeHtml(ch.desc)).join('; ')+'</div>';
+        html += '</div>';
+      }
+      if (workflowSpec.hard_constraints?.length) { html += '<div class="section-title" style="margin-top:8px">硬约束</div>'; for (const h of workflowSpec.hard_constraints) html += '<div>- '+escapeHtml(h)+'</div>'; }
+      if (workflowSpec.soft_guidance?.length) { html += '<div class="section-title" style="margin-top:8px">软引导</div>'; for (const s of workflowSpec.soft_guidance) html += '<div>- '+escapeHtml(s)+'</div>'; }
+    } else { html += '<div class="muted">无 spec 数据</div>'; }
+  } else if (mode === 'executing') {
+    // 展示时间线(只读)
+    html += '<div id="timelineBox"></div>';
+    html += '<div id="blackboardPanel" style="margin-top:12px"></div>';
+    el.innerHTML = html + '</div>';
+    renderTimelineBlocks('timelineBox');
+    renderBlackboard('blackboardPanel');
+    return;
+  } else if (mode === 'final_review') {
+    html += '<div class="guide-desc">最终方案审查</div>';
+    // 展示交付物
+    html += '<div id="deliverablesBox"></div>';
+    el.innerHTML = html + '</div>';
+    loadDeliverables();
+    return;
+  }
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+// 从指定阶段重跑
+async function doRerunFrom(mode) {
+  if (!selectedId) return;
+  if (!confirm('确认从「'+(STEPS.find(s=>s.key===mode)?.label||mode)+'」阶段重跑?后续阶段的数据将被重置。')) return;
+  setBusy(true);
+  try {
+    await post('/projects/'+selectedId+'/rerun-from', { phase: mode });
+    viewMode = null;
+    await refresh();
+  } catch(e) { alert(e.message); }
+  setBusy(false);
 }
 
 function renderMain() {
   const phase = getPhase();
   const el = $('mainArea');
+
+  // 回顾模式:展示之前阶段的内容(只读)
+  if (viewMode && viewMode !== phase) {
+    renderViewMode(el, viewMode);
+    return;
+  }
 
   // --- Clarifying ---
   if (phase === 'created' || phase === 'clarifying') {

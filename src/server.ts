@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import type { FastifyInstance } from "fastify";
-import { readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { readFile, readdir, stat, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { parse } from "yaml";
 
@@ -147,6 +147,40 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     const wfPath = join(projectPath(options.rootDir, request.params.id), "solution", "workflow.yaml");
     const raw = await readFile(wfPath, "utf8");
     return parse(raw);
+  });
+
+  // 从指定阶段重跑(重置后续阶段的状态)
+  app.post<{ Params: { id: string }; Body: { phase: string } }>("/projects/:id/rerun-from", async (request) => {
+    const phase = request.body.phase;
+    const state = await getProject(options.rootDir, request.params.id);
+    if (phase === "clarifying" || phase === "created") {
+      // 重置到澄清:清掉 clarifier
+      state.status.clarifier = { status: "clarifying", current_question: null, clarifications: [] };
+      state.project.status = "created";
+      state.status.workflows.solution = undefined;
+    } else if (phase === "composing" || phase === "plan_review") {
+      // 重置到规划:清掉 workflow
+      state.status.workflows.solution = undefined;
+      state.project.status = "created";
+      // 清掉 solution 目录下的 workflow.yaml
+      try { await rm(join(projectPath(options.rootDir, request.params.id), "solution", "workflow.yaml")); } catch {}
+    } else if (phase === "executing") {
+      // 重置到执行:清掉 runs/retries/blackboard,保留 spec
+      const wf = state.status.workflows.solution;
+      if (wf) {
+        wf.runs = {};
+        wf.node_retries = {};
+        wf.iteration = 0;
+        wf.current_node = null;
+        wf.awaiting = "none";
+        wf.awaiting_reason = undefined;
+        wf.awaiting_scene = undefined;
+        wf.workflow_status = "plan_review"; // 回 plan_review 重新 approve
+      }
+    }
+    await saveProjectState(options.rootDir, state);
+    bus.publish(projectEvent("status_changed", request.params.id, { status: phase }));
+    return { ok: true };
   });
 
   // 人审编辑 spec(改节点/checks/硬软约束)
