@@ -35,6 +35,11 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   const bus = options.bus ?? new EventBus();
   const client = options.client ?? new HttpLlmClient(await loadConfig());
 
+  // 静态文件:app.js
+  app.get("/app.js", async (_request, reply) => {
+    reply.type("text/javascript").send(await readFile(join(__dirname, "..", "public", "app.js"), "utf8"));
+  });
+
   app.get("/", async (_request, reply) => {
     reply.type("text/html");
     return renderHomePage();
