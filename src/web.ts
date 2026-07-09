@@ -331,9 +331,13 @@ function renderSteps() {
     else if (i === idx) { cls = 'active'; clickable = false; }
     // viewMode 高亮
     if (viewMode === s.key) cls = 'viewing';
-    const clickAttr = clickable ? ' style="cursor:pointer" onclick="setViewMode(\''+s.key+'\')"' : '';
+    const clickAttr = clickable ? ' style="cursor:pointer" data-step-key="'+s.key+'"' : '';
     return '<div class="step '+cls+'"'+clickAttr+'><span class="step-num">'+s.n+'</span>'+s.label+'</div>';
   }).join('');
+  // 绑定步骤点击
+  document.querySelectorAll('.step[data-step-key]').forEach(el => {
+    el.addEventListener('click', () => setViewMode(el.dataset.stepKey));
+  });
 }
 
 function setViewMode(mode) {
@@ -348,7 +352,7 @@ function renderViewMode(el, mode) {
   const phase = getPhase();
   let html = '<div class="guide"><div class="guide-title">回顾: ' + escapeHtml(STEPS.find(s => s.key === mode)?.label || mode) + '</div>';
   // 从此阶段重跑(只在非当前阶段时显示)
-  html += '<div class="row" style="margin:8px 0"><button class="secondary" onclick="doRerunFrom(\''+mode+'\')">从此阶段重跑</button> <button class="bad" onclick="setViewMode(\''+mode+'\')">返回当前</button></div>';
+  html += '<div class="row" style="margin:8px 0"><button class="secondary" id="rerunFromBtn">从此阶段重跑</button> <button class="bad" id="returnCurrentBtn">返回当前</button></div>';
 
   if (mode === 'created' || mode === 'clarifying') {
     const entries = state.status.clarifier?.clarifications ?? [];
@@ -377,20 +381,29 @@ function renderViewMode(el, mode) {
     html += '<div id="timelineBox"></div>';
     html += '<div id="blackboardPanel" style="margin-top:12px"></div>';
     el.innerHTML = html + '</div>';
+    bindViewModeButtons(mode);
     renderTimelineBlocks('timelineBox');
     renderBlackboard('blackboardPanel');
     return;
   } else if (mode === 'final_review') {
     html += '<div class="guide-desc">最终方案审查</div>';
-    // 展示交付物
     html += '<div id="deliverablesBox"></div>';
     el.innerHTML = html + '</div>';
+    bindViewModeButtons(mode);
     loadDeliverables();
     return;
   }
 
   html += '</div>';
   el.innerHTML = html;
+  bindViewModeButtons(mode);
+}
+
+function bindViewModeButtons(mode) {
+  const rerunBtn = $('rerunFromBtn');
+  if (rerunBtn) rerunBtn.onclick = () => doRerunFrom(mode);
+  const returnBtn = $('returnCurrentBtn');
+  if (returnBtn) returnBtn.onclick = () => setViewMode(mode);
 }
 
 // 从指定阶段重跑
