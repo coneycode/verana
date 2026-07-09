@@ -96,7 +96,7 @@ export async function planGraphWorkflow(
 
     // 充分性检查(独立 evaluator,三层审查)
     const sufficiency = await checkSufficiency(client, spec);
-    const errors = sufficiency.issues.filter(i => i.severity === "error");
+    const errors = (sufficiency.issues ?? []).filter(i => i.severity === "error");
     if (errors.length === 0) {
       // 通过!落盘
       return composeGraphWorkflow(rootDir, projectId, client, spec);
