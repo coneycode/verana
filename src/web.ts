@@ -235,8 +235,12 @@ function buildExecutionGraph(spec, wf) {
 }
 let selectedTaskId = null;
 let streamContent = '';
-let liveFeed = [];   // 执行阶段实时事件流:每条 {type, text, ts}
-let currentStreamRunId = null;  // 当前正在流式输出的 run
+let liveFeed = [];
+let currentStreamRunId = null;
+
+// 时间线 blocks:每条 = 一个节点执行 {nodeId, desc, runId, status, reason, llmOutput, verdict, diagnosis, ts}
+let timelineBlocks = [];
+
 const $ = (id) => document.getElementById(id);
 
 const STEPS = [
@@ -270,6 +274,7 @@ async function selectProject(id) {
   selectedTaskId = null;
   streamContent = '';
   liveFeed = [];
+  timelineBlocks = [];
   currentStreamRunId = null;
   $('empty').style.display='none';
   $('detail').style.display='block';
@@ -302,17 +307,10 @@ function render() {
   $('statusBox').textContent = JSON.stringify({ project: state.project, status: state.status }, null, 2);
   renderSteps();
   const phase = getPhase();
-  // 只在 executing 阶段 preserve(保留 liveFeed 不重绘)
-  // awaiting_human 必须重绘(要显示人审卡)
-  const preserve = phase === 'executing' && $('liveFeedBox');
+  // executing 阶段 preserve(不重绘整个 mainArea,保留时间线)
+  const preserve = phase === 'executing' && $('timelineBox');
   if (!preserve) {
     renderMain();
-  } else {
-    // preserve 模式:只更新执行轨迹图(节点状态变了),不重绘整个 mainArea
-    if ($('execGraph')) {
-      const wf = state?.status?.workflows?.solution;
-      renderMermaidGraph('execGraph', buildExecutionGraph(workflowSpec, wf));
-    }
   }
 }
 
@@ -373,22 +371,18 @@ function renderMain() {
     return;
   }
 
-  // --- Executing (图模型:全流程实时事件流 + blackboard 面板) ---
+  // --- Executing (单列时间线 + 侧边blackboard) ---
   if (phase === 'executing') {
     const wf = state.status.workflows.solution;
     const iter = wf?.iteration ?? 0;
-    const curNode = wf?.current_node ?? '-';
-    el.innerHTML = '<div class="guide"><div class="guide-title">执行中(图引擎)</div><div class="guide-desc">调度大脑每步从能力清单选节点执行,带理由留痕。轮次: '+iter+' | 当前节点: '+escapeHtml(curNode)+'</div><div class="row"><button class="secondary" id="runContinueBtn">继续/刷新</button></div></div>'+
-      '<div id="execGraph" style="margin-bottom:12px"></div>'+
-      '<div class="exec-layout"><div class="exec-left" id="execTimeline"></div><div class="exec-right" id="execStreamArea"></div></div>'+
+    el.innerHTML =
+      '<div class="guide"><div class="guide-title">执行中</div><div class="guide-desc">轮次: '+iter+'</div></div>'+
+      '<details style="margin-bottom:12px"><summary class="muted" style="cursor:pointer">规划概览</summary><div id="planOverview2" style="margin-top:8px"></div></details>'+
+      '<div id="timelineBox"></div>'+
       '<div id="blackboardPanel" style="margin-top:12px"></div>';
-    $('runContinueBtn').onclick = () => doRun();
-    renderTimeline('execTimeline');
-    renderLiveStream('execStreamArea');
+    renderTimelineBlocks('timelineBox');
+    renderPlanOverview('planOverview2');
     renderBlackboard('blackboardPanel');
-    // 执行轨迹图(节点带状态色+计数器)
-    const execGraphDef = buildExecutionGraph(workflowSpec, wf);
-    renderMermaidGraph('execGraph', execGraphDef);
     return;
   }
 
@@ -473,6 +467,103 @@ function renderPlanOverview(containerId) {
   for (const c of spec.completion_criteria ?? []) html += '<div class="task-meta">- '+escapeHtml(c)+'</div>';
   html += '</div>';
   el.innerHTML = html;
+}
+
+/** 时间线:单列 blocks,每块=一个节点执行 */
+function renderTimelineBlocks(containerId) {
+  const el = $(containerId);
+  if (!el) return;
+  if (timelineBlocks.length === 0) {
+    el.innerHTML = '<div class="muted" style="padding:12px">等待开始...</div>';
+    return;
+  }
+  let html = '';
+  for (let i = 0; i < timelineBlocks.length; i++) {
+    const b = timelineBlocks[i];
+    const isRunning = b.status === 'running';
+    const isFailed = b.status === 'failed';
+    const isPassed = b.status === 'passed';
+    const borderColor = isRunning ? '#f59e0b' : isFailed ? '#ef4444' : isPassed ? '#22c55e' : '#475569';
+    const statusIcon = isRunning ? '⟳' : isFailed ? '✗' : isPassed ? '✓' : '○';
+    const statusText = isRunning ? '执行中' : isFailed ? '失败' : isPassed ? '通过' : '等待';
+    // 正在执行和失败的块默认展开,通过的默认折叠
+    const expanded = isRunning || isFailed || b._expanded;
+
+    html += '<div class="tl-block" style="border:1px solid '+borderColor+';border-radius:8px;margin-bottom:8px;padding:0;overflow:hidden">';
+    // 头部
+    html += '<div class="tl-head" style="padding:10px 12px;cursor:pointer;background:#0d1626" onclick="toggleBlock('+i+')">';
+    html += '<span style="color:'+borderColor+';font-weight:bold">'+statusIcon+'</span> ';
+    html += '<span style="color:#e2e8f0">'+escapeHtml(b.desc || b.nodeId)+'</span>';
+    html += ' <span style="color:#475569;font-size:12px">'+statusText+'</span>';
+    if (b.runId) html += ' <span style="color:#334155;font-size:11px">'+escapeHtml(b.runId)+'</span>';
+    html += '</div>';
+    // 内容(展开时显示)
+    if (expanded) {
+      html += '<div class="tl-body" style="padding:8px 12px;border-top:1px solid #1f2d46">';
+      if (b.reason) html += '<div class="tl-reason" style="color:#64748b;font-size:13px;margin-bottom:6px">调度理由: '+escapeHtml(b.reason)+'</div>';
+      if (b.llmOutput) {
+        html += '<div class="tl-llm" style="background:#050b17;border-radius:6px;padding:8px;margin-bottom:6px;max-height:300px;overflow:auto;font-size:13px;white-space:pre-wrap;word-break:break-word;color:#dbeafe">'+escapeHtml(b.llmOutput)+'</div>';
+      }
+      if (b.verdict) {
+        const pass = b.verdict.passed;
+        html += '<div style="color:'+(pass?'#22c55e':'#ef4444')+';font-size:13px;margin-bottom:4px">'+(pass?'✅':'❌')+' 验证: '+(pass?'通过':'未通过')+(b.verdict.reasons?.length?' — '+escapeHtml(b.verdict.reasons[0].slice(0,80)):'')+'</div>';
+      }
+      if (b.diagnosis) {
+        html += '<div style="color:#a78bfa;font-size:13px;margin-bottom:4px">🔬 归因: '+escapeHtml(b.diagnosis.root_cause)+' — '+escapeHtml((b.diagnosis.explanation||'').slice(0,80))+'</div>';
+      }
+      if (b.llmOutput && isRunning) {
+        // 实时输出自动滚到底
+        html += '<script>setTimeout(function(){var e=document.querySelectorAll(".tl-llm");if(e.length){e[e.length-1].scrollTop=e[e.length-1].scrollHeight}},50)</script>';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
+
+function toggleBlock(i) {
+  if (timelineBlocks[i]) {
+    timelineBlocks[i]._expanded = !timelineBlocks[i]._expanded;
+    renderTimelineBlocks('timelineBox');
+  }
+}
+
+/** SSE 事件 → 更新 timelineBlocks */
+function updateBlockFromSSE(eventType, payload) {
+  if (eventType === 'node_selected') {
+    // 新节点开始或重试
+    const nodeId = payload.node || '';
+    const desc = workflowSpec?.capabilities?.find(c => c.id === nodeId)?.desc || nodeId;
+    const runId = payload.runId || '';
+    // 如果是同一节点重试,更新现有 block;否则新建
+    const existing = timelineBlocks.find(b => b.nodeId === nodeId && b.status === 'running');
+    if (existing) {
+      existing.status = 'failed'; // 之前的变 failed
+    }
+    timelineBlocks.push({ nodeId, desc, runId, status: 'running', reason: payload.reason || '', llmOutput: '', _expanded: false });
+  } else if (eventType === 'llm_stream') {
+    // LLM 输出追加到正在执行的 block
+    const running = timelineBlocks.find(b => b.status === 'running');
+    if (running) {
+      if (payload.delta) running.llmOutput += payload.delta;
+      else if (payload.message) running.llmOutput += (running.llmOutput ? '\n' : '') + payload.message;
+    }
+  } else if (eventType === 'verdict') {
+    const running = timelineBlocks.find(b => b.status === 'running');
+    if (running) {
+      running.verdict = payload.verdict;
+      running.status = payload.verdict?.passed ? 'passed' : 'failed';
+    }
+  } else if (eventType === 'diagnosis') {
+    const lastFailed = [...timelineBlocks].reverse().find(b => b.status === 'failed');
+    if (lastFailed) lastFailed.diagnosis = payload.diagnosis;
+  } else if (eventType === 'human_required') {
+    const running = timelineBlocks.find(b => b.status === 'running');
+    if (running) running.status = 'failed';
+  }
+  // 只在 executing 阶段重绘
+  if (getPhase() === 'executing') renderTimelineBlocks('timelineBox');
 }
 
 function renderTimeline(containerId) {
@@ -799,52 +890,36 @@ function connectEvents() {
   source.addEventListener('node_selected', (event) => {
     const data = JSON.parse(event.data);
     const p = data.payload || {};
-    if (p.reason) pushLiveItem('step', '🧠 <b>调度决策</b>: ' + escapeHtml(p.reason));
-    else if (p.runId) pushLiveItem('step', '▶️ <b>开始执行</b>');
+    updateBlockFromSSE('node_selected', p);
     refresh();
   });
   source.addEventListener('verdict', (event) => {
     const data = JSON.parse(event.data);
     const p = data.payload || {};
-    const pass = p.verdict?.passed;
-    pushLiveItem('step', (pass?'✅ ':'❌ ')+'<b>验证</b>: '+(pass?'通过':'未通过')+(p.verdict?.reasons?.length?(' — '+escapeHtml(p.verdict.reasons[0].slice(0,80))):''));
+    updateBlockFromSSE('verdict', p);
     refresh();
   });
   source.addEventListener('blackboard_updated', (event) => {
-    const data = JSON.parse(event.data);
-    const p = data.payload || {};
-    pushLiveItem('meta', '📝 <b>记忆更新</b>: '+(p.fields?.length?(' → '+escapeHtml(p.fields.join(', '))):''));
     refresh();
   });
   source.addEventListener('human_required', (event) => {
     const data = JSON.parse(event.data);
     const p = data.payload || {};
-    pushLiveItem('step', '⚠️ <b>需要人审</b>: '+escapeHtml(p.scene||'?')+' — '+escapeHtml(p.reason||''));
+    updateBlockFromSSE('human_required', p);
     refresh();
   });
   source.addEventListener('diagnosis', (event) => {
     const data = JSON.parse(event.data);
     const p = data.payload || {};
-    const d = p.diagnosis || {};
-    pushLiveItem('step', '🔬 <b>归因</b>: '+escapeHtml(d.root_cause||'?')+' — '+escapeHtml((d.explanation||'').slice(0,80)));
+    updateBlockFromSSE('diagnosis', p);
     refresh();
   });
-  // LLM 流式 delta → liveFeed 实时追加
+  // LLM 流式 delta → 更新当前 block
   source.addEventListener('llm_stream', (event) => {
     const data = JSON.parse(event.data);
     const payload = data.payload || {};
-    if (payload.runId) { activeRunId = payload.runId; currentStreamRunId = payload.runId; }
-    if (payload.delta) {
-      // delta 逐字追加 — 同 run 的连续 delta 合并到上一条 llm-line(不重复加时间戳)
-      appendLlmDelta(payload.delta);
-    } else if (payload.message) {
-      pushLiveItem('meta', '💬 '+escapeHtml(payload.message));
-    } else if (payload.content) {
-      currentStreamRunId = null;
-    }
-    const phase = getPhase();
-    if (phase === 'executing') {
-      renderTimeline('execTimeline');
+    if (payload.delta || payload.message) {
+      updateBlockFromSSE('llm_stream', payload);
     }
   });
 }
