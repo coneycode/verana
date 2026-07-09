@@ -172,44 +172,22 @@ let activeRunId = null;
 // Mermaid 初始化
 if (typeof mermaid !== 'undefined') { mermaid.initialize({ startOnLoad: false, theme: 'dark', flowchart: { curve: 'basis' } }); }
 
-// 生成能力关系图(从 inputs/outputs/updates 推断边,节点用中文描述)
+// 生成能力关系图(只画节点,不推测边)
 function buildCapabilityGraph(spec) {
   if (!spec || !spec.capabilities) return '';
   const caps = spec.capabilities;
-  const edges = inferEdges(caps);
   let lines = ['flowchart TD'];
-  // 边样式: classDef
   lines.push('  classDef agent fill:#1a2744,stroke:#3b82f6,color:#93c5fd');
   lines.push('  classDef light fill:#1a2a1a,stroke:#22c55e,color:#86efac');
   lines.push('  classDef entry fill:#1a1f2e,stroke:#f59e0b,color:#fcd34d,stroke-width:2px');
   for (const c of caps) {
-    // Mermaid 节点 ID 用英文(c.id),显示文本用中文描述
     const desc = c.desc.slice(0, 40);
     const shape = c.kind === 'agent' ? '["' + desc + '"]' : '(("' + desc + '"))';
     lines.push('  ' + c.id + shape);
     lines.push('  class ' + c.id + ' ' + (c.kind === 'agent' ? 'agent' : 'light'));
   }
-  for (const [a, b] of edges) lines.push('  ' + a + ' --> ' + b);
   if (spec.entry_node) lines.push('  class ' + spec.entry_node + ' entry');
   return lines.join('\\n');
-}
-
-// 从 inputs/outputs/updates 推断节点间依赖边
-function inferEdges(caps) {
-  const edges = [];
-  for (const a of caps) {
-    const aOutputs = new Set();
-    (a.outputs ?? []).forEach(o => aOutputs.add(o.path));
-    (a.updates ?? []).forEach(u => aOutputs.add(u));
-    for (const b of caps) {
-      if (a.id === b.id) continue;
-      for (const inp of (b.inputs ?? [])) {
-        if (inp.path && aOutputs.has(inp.path)) { edges.push([a.id, b.id]); break; }
-        if (inp.ref && aOutputs.has(inp.ref)) { edges.push([a.id, b.id]); break; }
-      }
-    }
-  }
-  return edges;
 }
 
 // 渲染 Mermaid 图到容器
@@ -224,39 +202,35 @@ async function renderMermaidGraph(containerId, graphDef) {
   }
 }
 
-// 生成执行轨迹图(节点用中文描述,带状态色+执行次数+当前节点高亮)
+// 生成执行轨迹图(只画已执行和正在执行的节点,不画没跑的,不推测边)
 function buildExecutionGraph(spec, wf) {
   if (!spec || !spec.capabilities) return '';
   const caps = spec.capabilities;
   const runs = wf?.runs ?? {};
   const retries = wf?.node_retries ?? {};
   const curNode = wf?.current_node;
-  const edges = inferEdges(caps);
+  // 从事件日志的实际执行顺序推断边:如果 A 执行完后 B 接着执行,A→B 画一条边
+  // 但我们这里没有事件日志的顺序信息(只有 runs),所以只画节点不画边
   let lines = ['flowchart TD'];
-  // 状态色
   lines.push('  classDef passed fill:#142a1a,stroke:#22c55e,color:#86efac');
   lines.push('  classDef failed fill:#2a1414,stroke:#ef4444,color:#fca5a5');
   lines.push('  classDef running fill:#1a1f2e,stroke:#f59e0b,color:#fcd34d,stroke-width:3px');
-  lines.push('  classDef pending fill:#0a1428,stroke:#475569,color:#64748b');
-  lines.push('  classDef agent fill:#1a2744,stroke:#3b82f6,color:#93c5fd');
   for (const c of caps) {
     const nodeRuns = runs[c.id] ?? [];
     const runCount = nodeRuns.length;
     const failCount = retries[c.id] ?? 0;
     const isRunning = curNode === c.id && wf?.awaiting === 'none_midstep';
-    // 节点显示:中文描述 + 状态标记
+    // 只画已经执行过或正在执行的节点
+    if (runCount === 0 && !isRunning) continue;
     let label = c.desc.slice(0, 35);
     if (runCount > 0) label += '\\n✓' + runCount + '次';
     if (failCount > 0) label += ' \\n✗' + failCount + '次失败';
     if (isRunning) label += '\\n⟳ 执行中';
     lines.push('  ' + c.id + '["' + label + '"]');
-    // 状态着色
     if (isRunning) lines.push('  class ' + c.id + ' running');
-    else if (runCount > 0 && failCount === 0) lines.push('  class ' + c.id + ' passed');
     else if (failCount > 0 && runCount === 0) lines.push('  class ' + c.id + ' failed');
-    else lines.push('  class ' + c.id + ' pending');
+    else lines.push('  class ' + c.id + ' passed');
   }
-  for (const [a, b] of edges) lines.push('  ' + a + ' --> ' + b);
   return lines.join('\\n');
 }
 let selectedTaskId = null;
