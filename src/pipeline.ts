@@ -6,6 +6,7 @@ import { getProject, projectPath, saveProjectState, writeYaml } from "./project-
 import type { CapabilityNode, GraphWorkflowSpec, GraphRuntime } from "./types.js";
 import { validateGraphWorkflow } from "./workflow-validator.js";
 import { checkSufficiency } from "./sufficiency-checker.js";
+import { projectEvent, type EventBus } from "./events.js";
 
 // 重导出图执行引擎
 export { runGraphProject, readGraphSpec, applyHumanVerdict } from "./graph-engine.js";
@@ -73,6 +74,7 @@ export async function planGraphWorkflow(
   rootDir: string,
   projectId: string,
   client: LlmClient,
+  bus?: EventBus,
 ): Promise<GraphWorkflowSpec> {
   const state = await getProject(rootDir, projectId);
   const goal = state.project.goal;
@@ -83,26 +85,31 @@ export async function planGraphWorkflow(
   let lastIssues: string = "";
 
   for (let attempt = 0; attempt < MAX_REGEN; attempt++) {
+    bus?.publish(projectEvent("plan_progress", projectId, { step: "composing", attempt: attempt + 1, max: MAX_REGEN, message: `Composer 生成中(第${attempt + 1}次)...` }));
     const userPrompt = buildComposerPrompt(goal, clarifications) + (lastIssues ? `\n\n【上轮问题清单(请修复)】\n${lastIssues}` : "");
     const llmResult = await client.completeJson<ComposerLlmResult>("composer", COMPOSER_SYSTEM, userPrompt);
 
     const spec = assembleSpec(projectId, goal, llmResult);
     const validation = validateGraphWorkflow(spec);
     if (!validation.passed) {
+      bus?.publish(projectEvent("plan_progress", projectId, { step: "hard_check_failed", attempt: attempt + 1, message: `硬校验未通过: ${validation.errors.join("; ")}` }));
       lastIssues = validation.errors.map(e => `[硬校验] ${e}`).join("\n");
       if (attempt < MAX_REGEN - 1) continue;
       throw new Error(`Generated workflow failed hard checks after ${MAX_REGEN} attempts: ${validation.errors.join("; ")}`);
     }
 
     // 充分性检查(独立 evaluator,三层审查)
+    bus?.publish(projectEvent("plan_progress", projectId, { step: "sufficiency_check", attempt: attempt + 1, message: `充分性检查中(路径/指令/验收)...` }));
     const sufficiency = await checkSufficiency(client, spec);
     const errors = (sufficiency.issues ?? []).filter(i => i.severity === "error");
     if (errors.length === 0) {
       // 通过!落盘
+      bus?.publish(projectEvent("plan_progress", projectId, { step: "done", message: "规划完成,进入人审" }));
       return composeGraphWorkflow(rootDir, projectId, client, spec);
     }
 
     // 有问题,带问题清单重生成
+    bus?.publish(projectEvent("plan_progress", projectId, { step: "sufficiency_failed", attempt: attempt + 1, message: `发现${errors.length}个问题,带问题清单重生成...` }));
     lastIssues = errors.map(i => `[${i.layer}] ${i.node_id ? `节点${i.node_id}: ` : ""}${i.description}`).join("\n");
   }
 

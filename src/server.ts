@@ -97,16 +97,17 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
 
   app.post<{ Params: { id: string } }>("/projects/:id/plan", async (request) => {
     const body = (request.body as { spec?: GraphWorkflowSpec }) ?? {};
-    let workflow: GraphWorkflowSpec;
+    // fire-and-forget:前端不等待返回,通过 SSE 看进度
     if (body.spec) {
-      // 手写 spec 模式(测试/调试用)
-      workflow = await composeGraphWorkflow(options.rootDir, request.params.id, client, body.spec);
+      composeGraphWorkflow(options.rootDir, request.params.id, client, body.spec)
+        .then(() => { bus.publish(projectEvent("plan_composed", request.params.id)); })
+        .catch((err: Error) => { bus.publish(projectEvent("run_failed", request.params.id, { error: err.message })); });
     } else {
-      // Composer 自动规划模式(从目标 + 澄清生成能力+护栏+schema)
-      workflow = await planGraphWorkflow(options.rootDir, request.params.id, client);
+      planGraphWorkflow(options.rootDir, request.params.id, client, bus)
+        .then(() => { bus.publish(projectEvent("plan_composed", request.params.id)); })
+        .catch((err: Error) => { bus.publish(projectEvent("run_failed", request.params.id, { error: err.message })); });
     }
-    bus.publish(projectEvent("plan_composed", request.params.id));
-    return workflow;
+    return { status: "composing", projectId: request.params.id };
   });
 
   app.post<{ Params: { id: string }; Body: { gate: string; note?: string } }>("/projects/:id/approve", async (request) => {

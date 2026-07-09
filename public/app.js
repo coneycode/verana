@@ -82,6 +82,9 @@ const $ = (id) => document.getElementById(id);
 
 // 当前查看的阶段(null=跟随实际 phase,非null=回顾指定阶段)
 let viewMode = null;
+let planProgress = '';
+
+function setPlanProgress(msg) { planProgress = msg; const el = document.getElementById('planProgressMsg'); if (el) el.textContent = msg; }
 
 const STEPS = [
   { key: 'created', label: '创建', n: 1 },
@@ -284,7 +287,7 @@ function renderMain() {
 
   // --- Composing ---
   if (phase === 'composing') {
-    el.innerHTML = '<div class="guide"><div class="guide-title">合成 Workflow</div><div class="guide-desc">系统正在根据澄清结果合成方案 workflow...</div></div>';
+    el.innerHTML = '<div class="guide"><div class="guide-title">合成 Workflow</div><div class="guide-desc" id="planProgressMsg">正在启动...</div></div>';
     return;
   }
 
@@ -823,8 +826,12 @@ function connectEvents() {
   $('connection').textContent = 'SSE: connecting';
   source.onopen = () => $('connection').textContent = 'SSE: connected';
   source.onerror = () => $('connection').textContent = 'SSE: disconnected';
-  ['snapshot','project_created','plan_composed','gate_approved','gate_rejected','run_completed','run_failed','input_recorded','status_changed','blackboard_updated','human_required','human_verdict','verdict'].forEach(type => source.addEventListener(type, () => { refresh(); }));
-  // 全流程步骤事件 → liveFeed
+  ['snapshot','project_created','plan_composed','plan_progress','gate_approved','gate_rejected','run_completed','run_failed','input_recorded','status_changed','blackboard_updated','human_required','human_verdict','verdict'].forEach(type => source.addEventListener(type, () => { refresh(); }));
+  source.addEventListener('plan_progress', (event) => {
+    const data = JSON.parse(event.data);
+    const p = data.payload || {};
+    if (p.message) setPlanProgress(p.message);
+  });  // 全流程步骤事件 → liveFeed
   source.addEventListener('node_selected', (event) => {
     const data = JSON.parse(event.data);
     const p = data.payload || {};
