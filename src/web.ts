@@ -551,7 +551,7 @@ function updateBlockFromSSE(eventType, payload) {
     const running = timelineBlocks.find(b => b.status === 'running');
     if (running) {
       if (payload.delta) running.llmOutput += payload.delta;
-      else if (payload.message) running.llmOutput += (running.llmOutput ? '\n' : '') + payload.message;
+      else if (payload.message) running.llmOutput += (running.llmOutput ? String.fromCharCode(10) : '') + payload.message;
     }
   } else if (eventType === 'verdict') {
     const running = timelineBlocks.find(b => b.status === 'running');
