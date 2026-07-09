@@ -482,7 +482,7 @@ function renderTimeline(containerId) {
   if (!wf) { el.innerHTML = '<div class="muted">无 workflow。</div>'; return; }
   const runs = wf.runs || {};
   const allRunIds = Object.values(runs).flat();
-  if (!allRunIds.length) { el.innerHTML = '<div class="muted">暂无 run(等待调度大脑第一步决策)。</div>'; return; }
+  if (!allRunIds.length) { el.innerHTML = '<div class="muted">暂无执行记录</div>'; return; }
   // 按 run 顺序展示(轮次时间线)
   let html = '';
   for (const [nodeId, nodeRuns] of Object.entries(runs)) {
@@ -533,7 +533,7 @@ function renderLiveStream(containerId) {
   // 实时事件流
   html += '<div class="live-feed" id="liveFeedBox">';
   if (liveFeed.length === 0) {
-    html += '<div class="muted" style="padding:12px">等待调度大脑第一步决策...</div>';
+    html += '<div class="muted" style="padding:12px">等待开始...</div>';
   } else {
     for (const item of liveFeed) {
       const cls = item.type === 'llm' ? 'llm-line' : (item.type === 'step' ? 'step-line' : 'meta-line');
@@ -593,7 +593,7 @@ function renderExecStream(containerId) {
   if (spec) title += ' [' + spec.kind + ']';
   let statusText = 'iteration ' + iter;
   if (activeRunId) statusText += ' | ' + activeRunId;
-  el.innerHTML = '<div class="stream-status">节点: '+escapeHtml(title)+' | '+escapeHtml(statusText)+'</div><div class="stream-box" id="streamBox">'+(streamContent ? markdownToHtml(streamContent) : escapeHtml(activeRunId ? '点击 run 查看输出,或等待 LLM 实时输出...' : '暂无 run 记录,等待调度大脑决策...'))+'</div>';
+  el.innerHTML = '<div class="stream-status">'+escapeHtml(statusText)+'</div><div class="stream-box" id="streamBox">'+(streamContent ? markdownToHtml(streamContent) : escapeHtml(activeRunId ? '等待 LLM 实时输出...' : '暂无输出'))+'</div>';
 }
 
 function guessNodeIdFromRun(runId) {
@@ -799,27 +799,34 @@ function connectEvents() {
   source.addEventListener('node_selected', (event) => {
     const data = JSON.parse(event.data);
     const p = data.payload || {};
-    if (p.reason) pushLiveItem('step', '🧠 <b>调度决策</b>: 选 '+escapeHtml(p.node||'?')+' — '+escapeHtml(p.reason));
-    else if (p.runId) pushLiveItem('step', '▶️ <b>开始执行</b>: '+escapeHtml(p.node||'?')+' ('+escapeHtml(p.runId)+')');
+    if (p.reason) pushLiveItem('step', '🧠 <b>调度决策</b>: ' + escapeHtml(p.reason));
+    else if (p.runId) pushLiveItem('step', '▶️ <b>开始执行</b>');
     refresh();
   });
   source.addEventListener('verdict', (event) => {
     const data = JSON.parse(event.data);
     const p = data.payload || {};
     const pass = p.verdict?.passed;
-    pushLiveItem('step', (pass?'✅ ':'❌ ')+'<b>验证</b>: '+escapeHtml(p.node||'?')+' '+(pass?'通过':'未通过')+(p.verdict?.reasons?.length?(' — '+escapeHtml(p.verdict.reasons[0].slice(0,80))):''));
+    pushLiveItem('step', (pass?'✅ ':'❌ ')+'<b>验证</b>: '+(pass?'通过':'未通过')+(p.verdict?.reasons?.length?(' — '+escapeHtml(p.verdict.reasons[0].slice(0,80))):''));
     refresh();
   });
   source.addEventListener('blackboard_updated', (event) => {
     const data = JSON.parse(event.data);
     const p = data.payload || {};
-    pushLiveItem('meta', '📝 <b>记忆更新</b>: '+escapeHtml(p.node||'?')+(p.fields?.length?(' → '+escapeHtml(p.fields.join(', '))):''));
+    pushLiveItem('meta', '📝 <b>记忆更新</b>: '+(p.fields?.length?(' → '+escapeHtml(p.fields.join(', '))):''));
     refresh();
   });
   source.addEventListener('human_required', (event) => {
     const data = JSON.parse(event.data);
     const p = data.payload || {};
     pushLiveItem('step', '⚠️ <b>需要人审</b>: '+escapeHtml(p.scene||'?')+' — '+escapeHtml(p.reason||''));
+    refresh();
+  });
+  source.addEventListener('diagnosis', (event) => {
+    const data = JSON.parse(event.data);
+    const p = data.payload || {};
+    const d = p.diagnosis || {};
+    pushLiveItem('step', '🔬 <b>归因</b>: '+escapeHtml(d.root_cause||'?')+' — '+escapeHtml((d.explanation||'').slice(0,80)));
     refresh();
   });
   // LLM 流式 delta → liveFeed 实时追加
