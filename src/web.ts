@@ -317,14 +317,15 @@ function getPhase() {
 function render() {
   $('statusBox').textContent = JSON.stringify({ project: state.project, status: state.status }, null, 2);
   renderSteps();
-  // executing/awaiting_human 阶段:主区域已建立 liveFeed,preserveMode=true 时不重绘(避免丢实时流)
   const phase = getPhase();
-  const preserve = (phase === 'executing' || phase === 'awaiting_human') && $('liveFeedBox');
+  // 只在 executing 阶段 preserve(保留 liveFeed 不重绘)
+  // awaiting_human 必须重绘(要显示人审卡)
+  const preserve = phase === 'executing' && $('liveFeedBox');
   if (!preserve) {
     renderMain();
   } else {
     // preserve 模式:只更新执行轨迹图(节点状态变了),不重绘整个 mainArea
-    if (phase === 'executing' && $('execGraph')) {
+    if ($('execGraph')) {
       const wf = state?.status?.workflows?.solution;
       renderMermaidGraph('execGraph', buildExecutionGraph(workflowSpec, wf));
     }
