@@ -89,11 +89,11 @@ function setPlanProgress(msg) { planProgress = msg; const el = document.getEleme
 const STEPS = [
   { key: 'created', label: '创建', n: 1 },
   { key: 'clarifying', label: '澄清', n: 2 },
-  { key: 'composing', label: '合成', n: 3 },
-  { key: 'plan_review', label: '审 Plan', n: 4 },
-  { key: 'executing', label: '执行', n: 5 },
-  { key: 'final_review', label: '审方案', n: 6 },
-  { key: 'approved', label: '完成', n: 7 },
+  { key: 'composing', label: '规划', n: 3 },
+  { key: 'plan_review', label: '规划', n: 3 },
+  { key: 'executing', label: '执行', n: 4 },
+  { key: 'final_review', label: '审方案', n: 5 },
+  { key: 'approved', label: '完成', n: 6 },
 ];
 
 async function api(path, options = {}) {
@@ -203,7 +203,7 @@ function renderViewMode(el, mode) {
         html += '<div class="qa-item"><div class="qa-q">Q: '+escapeHtml(e.q)+'</div><div class="qa-a">A: '+escapeHtml(e.a)+'</div></div>';
       }
     } else { html += '<div class="muted">无澄清记录</div>'; }
-  } else if (mode === 'composing' || mode === 'plan_review') {
+  } else if (mode === 'composing' || mode === 'plan_review') { // 合并:规划阶段
     // 展示 spec(能力清单+硬约束+软引导)
     if (workflowSpec) {
       html += '<div class="section-title">能力清单</div>';
