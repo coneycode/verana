@@ -77,7 +77,7 @@ export function renderHomePage(): string {
   <header><div style="display:flex;align-items:center;gap:8px"><button id="sidebarToggle" style="padding:4px 8px;font-size:14px;cursor:pointer;border:1px solid var(--border);background:var(--panel);color:var(--text);border-radius:4px">&#9776;</button><h1>Verana</h1></div><div class="muted" id="connection">SSE: idle</div></header>
   <main>
     <section id="sidebar" style="width:240px; border-right:1px solid var(--border); display:flex; flex-direction:column; transition: width 0.2s; overflow:hidden;">
-      <div class="section-title">Projects</div>
+      <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">Projects <button id="newProjectBtn" style="font-size:11px;padding:2px 8px;border:1px solid var(--border);background:var(--panel);color:var(--text);border-radius:4px;cursor:pointer">新建</button></div>
       <div id="projects" style="flex:1; overflow-y:auto; padding:8px;"></div>
     </section>
     <section style="display:flex; flex-direction:column;">

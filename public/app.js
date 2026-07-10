@@ -950,8 +950,8 @@ function markdownToHtml(md) {
 $('createBtn').onclick = async () => { const name = $('projectName').value.trim(); const goal = $('goal').value.trim(); if (!name || !goal) { alert('请填写项目名称和目标'); return; } setBusy(true); try { const created = await post('/projects', { name, goal }); selectedId = created.project.id; $('projectName').value=''; $('goal').value=''; await loadProjects(); await selectProject(selectedId); } catch(e) { alert(e.message); } setBusy(false); };
 const sidebar = document.getElementById('sidebar');
 let sidebarCollapsed = false;
+document.getElementById('newProjectBtn').onclick = () => { selectedId = null; history.replaceState(null, '', '#'); location.reload(); };
 document.getElementById('sidebarToggle').onclick = () => { sidebarCollapsed = !sidebarCollapsed; if (sidebar) { sidebar.style.width = sidebarCollapsed ? '0px' : '240px'; } };
-
 loadProjects().then(() => {
   // 从 URL hash 恢复选中的项目(刷新后保持原界面)
   const hashId = decodeURIComponent(location.hash.slice(1));
