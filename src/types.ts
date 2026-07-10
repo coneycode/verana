@@ -168,6 +168,7 @@ export interface ClarifierRecord {
   status: "clarifying" | "goal_confirmed";
   clarifications: Array<{ q: string; a: string; risk: string }>;
   current_question?: { question: string; risk: string } | null;
+  pending_batch?: Array<{ question: string; risk: string; dimension: string }> | null;
 }
 
 export interface ProjectState {

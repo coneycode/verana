@@ -270,18 +270,29 @@ function renderMain() {
 
   // --- Clarifying ---
   if (phase === 'created' || phase === 'clarifying') {
-    const cq = state.status.clarifier?.current_question;
-    const qText = cq ? cq.question : '';
-    const rText = cq ? cq.risk : '';
+    const batch = state.status.clarifier?.pending_batch;
     const entries = state.status.clarifier?.clarifications ?? [];
-    el.innerHTML = '<div class="guide"><div class="guide-title">澄清目标</div>'+
-      (qText ? '<div class="guide-desc">'+escapeHtml(qText)+'</div>' : '<div class="guide-desc muted">目标已足够清晰,可直接生成 Plan。</div>')+
-      (rText ? '<div class="risk-box">'+escapeHtml(stripDim(rText))+'</div>' : '')+
-      '<input id="answer" placeholder="输入你的回答" />'+
-      '<div class="row" style="margin-top:8px"><button id="answerBtn">'+(cq?'提交回答':'直接生成 Plan')+'</button><button class="secondary" id="finishClarifyBtn">跳过,直接生成 Plan</button></div></div>'+
-      (entries.length ? '<div class="section-title" style="margin-top:12px">已澄清记录</div><div class="body">'+entries.map(e => '<div class="qa-item"><div class="qa-q">Q: '+escapeHtml(e.q)+'</div><div class="qa-a">A: '+escapeHtml(e.a)+'</div><div class="muted">⚠ '+escapeHtml(stripDim(e.risk))+'</div></div>').join('')+'</div>' : '');
-    const answerBtn = $('answerBtn'); if (answerBtn) answerBtn.onclick = () => cq ? doAnswer() : doPlan();
-    const finishBtn = $('finishClarifyBtn'); if (finishBtn) finishBtn.onclick = () => doPlan();
+    if (batch && batch.length > 0) {
+      // 有待回答的问题,展示批量问答表单
+      let html = '<div class="guide"><div class="guide-title">澄清目标</div><div class="guide-desc">请回答以下问题,帮助系统更好地规划方案:</div>';
+      for (let i = 0; i < batch.length; i++) {
+        const q = batch[i];
+        html += '<div class="qa-item" style="margin:8px 0"><div class="qa-q">Q'+(i+1)+': '+escapeHtml(q.question)+'</div>';
+        html += '<div class="muted" style="font-size:12px;margin:2px 0">'+escapeHtml(q.risk)+'</div>';
+        html += '<input id="answer_'+i+'" data-q="'+escapeHtml(q.question)+'" placeholder="输入回答" style="width:100%;margin-top:4px" /></div>';
+      }
+      html += '<div class="row" style="margin-top:8px"><button id="submitBatchBtn">提交全部回答</button><button class="secondary" id="skipClarifyBtn">跳过,直接生成</button></div></div>';
+      if (entries.length > 0) {
+        html += '<div class="section-title" style="margin-top:12px">已回答</div>';
+        for (const e of entries) { html += '<div class="qa-item"><div class="qa-q">Q: '+escapeHtml(e.q)+'</div><div class="qa-a">A: '+escapeHtml(e.a)+'</div></div>'; }
+      }
+      el.innerHTML = html;
+      $('submitBatchBtn').onclick = () => doClarifyAnswer(batch.length);
+      $('skipClarifyBtn').onclick = () => doPlan();
+    } else {
+      // 没有待回答的问题
+      el.innerHTML = '<div class="guide"><div class="guide-title">澄清目标</div><div class="guide-desc muted">正在生成澄清问题...</div></div>';
+    }
     return;
   }
 

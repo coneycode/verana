@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parse } from "yaml";
 
-import { appendClarification, buildGoalSummary, nextClarificationQuestion } from "./clarifier.js";
+import { generateClarifyBatch, reviewClarifications, buildGoalSummary } from "./clarifier.js";
 import { HttpLlmClient, loadConfig, type LlmClient } from "./llm.js";
 import { approveGate, createProject, getProject, listProjects, projectPath, rejectGate, saveProjectState } from "./project-store.js";
 
@@ -77,23 +77,20 @@ export async function runCli(argv: string[], output: Output = console.log, clien
   }
 
   if (command === "input") {
-    const answer = args.slice(1).join(" ").trim();
-    if (!answer) throw new Error("Usage: verana input <project-id> <answer>");
-    const state = appendClarification(await getProject(root, projectId), answer, await nextClarificationQuestion(await getProject(root, projectId), llm));
-    await saveProjectState(root, state);
-    output("input recorded");
-    const next = await nextClarificationQuestion(state, llm);
-    output(next ? `next_question: ${next.question}` : "goal_ready");
+    output("批量澄清请通过 Web UI 操作(http://localhost:8787)");
     return;
   }
 
   if (command === "clarify") {
     const state = await getProject(root, projectId);
-    if (state.status.clarifier?.current_question) {
-      output(state.status.clarifier.current_question.question);
-      output(`[risk] ${state.status.clarifier.current_question.risk}`);
+    const batch = state.status.clarifier?.pending_batch;
+    if (batch && batch.length > 0) {
+      for (const q of batch) {
+        output(`[${q.dimension}] ${q.question}`);
+        output(`  risk: ${q.risk}`);
+      }
     } else {
-      output("no active question (goal may be ready)");
+      output("no pending questions (clarification may be complete)");
     }
     return;
   }

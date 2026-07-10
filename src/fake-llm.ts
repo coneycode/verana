@@ -63,7 +63,17 @@ export function buildSmartFakeClient(): FakeLlmClient {
   let schedCount = 0;
   return new FakeLlmClient((role, system, user) => {
     // Clarifier
-    if (role === "composer" && system.includes("方案澄清助手")) return { json: fakeClarifierQuestion() };
+    // 批量澄清:一次性生成多个问题
+    if (role === "composer" && system.includes("方案澄清助手")) {
+      return { json: { questions: [
+        { dimension: "平台", question: "你要监控哪些平台?", risk: "不澄清会导致方案偏掉" },
+        { dimension: "规模", question: "需要监控多少个红人?", risk: "影响系统选型的价格档位" },
+      ] } };
+    }
+    // 澄清二次校验
+    if (role === "evaluator" && system.includes("澄清审核者")) {
+      return { json: { need_followup: false } };
+    }
 
     // Composer 规划(生成图工作流 spec)
     if (role === "composer" && system.includes("workflow 规划者")) {

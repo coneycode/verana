@@ -4,7 +4,7 @@ import { readFile, readdir, stat, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { parse } from "yaml";
 
-import { appendClarification, buildGoalSummary, nextClarificationQuestion } from "./clarifier.js";
+import { generateClarifyBatch, reviewClarifications, buildGoalSummary, type ClarificationEntry } from "./clarifier.js";
 import { EventBus, projectEvent } from "./events.js";
 import { HttpLlmClient, loadConfig, type LlmClient } from "./llm.js";
 import { approveGate, deleteProject, getProject, listProjects, projectPath, rejectGate, saveProjectState } from "./project-store.js";
@@ -56,43 +56,50 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     return { status: "deleted", projectId: request.params.id };
   });
 
-  app.get<{ Params: { id: string } }>("/projects/:id/clarify", async (request) => {
+  // 一次性生成全部澄清问题
+  app.post<{ Params: { id: string } }>("/projects/:id/clarify-batch", async (request) => {
     const state = await getProject(options.rootDir, request.params.id);
-    if (state.status.clarifier?.current_question) {
-      return state.status.clarifier.current_question;
+    const batch = await generateClarifyBatch(state, client);
+    // 存到 state(待回答)
+    if (!state.status.clarifier) {
+      state.status.clarifier = { status: "clarifying", clarifications: [] };
     }
-    const question = await nextClarificationQuestion(state, client);
-    return question ?? { summary: buildGoalSummary(state) };
-  });
-
-  app.post<{ Params: { id: string } }>("/projects/:id/clarify", async (request) => {
-    const state = await getProject(options.rootDir, request.params.id);
-    // If we already have a current question, don't call LLM again (avoid 429 + question changing)
-    if (state.status.clarifier?.current_question) {
-      return state.status.clarifier.current_question;
-    }
-    const question = await nextClarificationQuestion(state, client);
-    if (question && !state.status.clarifier) {
-      state.status.clarifier = { status: "clarifying", clarifications: [], current_question: question };
-      await saveProjectState(options.rootDir, state);
-    } else if (question && state.status.clarifier) {
-      state.status.clarifier.current_question = question;
-      await saveProjectState(options.rootDir, state);
-    }
+    state.status.clarifier.current_question = null;
+    state.status.clarifier.pending_batch = batch.questions;
+    await saveProjectState(options.rootDir, state);
     bus.publish(projectEvent("clarify_started", request.params.id));
-    return question ?? { summary: buildGoalSummary(state) };
+    return batch;
   });
 
-  app.post<{ Params: { id: string }; Body: { answer: string } }>("/projects/:id/input", async (request) => {
+  // 批量回答澄清问题
+  app.post<{ Params: { id: string }; Body: { answers: Array<{ q: string; a: string }> } }>("/projects/:id/clarify-answer", async (request) => {
     const state = await getProject(options.rootDir, request.params.id);
-    const next = await nextClarificationQuestion(state, client);
-    const updated = appendClarification(state, request.body.answer, next);
-    if (updated.status.clarifier) {
-      updated.status.clarifier.current_question = next;
+    const answers = request.body.answers ?? [];
+    // 把问答追加到 clarifications
+    const existing = state.status.clarifier?.clarifications ?? [];
+    const newEntries: ClarificationEntry[] = answers.map(a => ({ q: a.q, a: a.a, risk: "" }));
+    state.status.clarifier = {
+      status: "clarifying",
+      clarifications: [...existing, ...newEntries],
+    };
+    state.status.clarifier.pending_batch = undefined;
+    await saveProjectState(options.rootDir, state);
+
+    // 二次校验:是否需要追问
+    const review = await reviewClarifications(state, client);
+    if (review.needFollowup && review.questions.length > 0) {
+      state.status.clarifier.pending_batch = review.questions;
+      await saveProjectState(options.rootDir, state);
+      bus.publish(projectEvent("input_recorded", request.params.id));
+      return { needFollowup: true, questions: review.questions };
     }
-    await saveProjectState(options.rootDir, updated);
+
+    // 不需要追问,澄清完成
+    state.status.clarifier.status = "goal_confirmed";
+    state.project.status = "composing";
+    await saveProjectState(options.rootDir, state);
     bus.publish(projectEvent("input_recorded", request.params.id));
-    return { state: updated, next_question: next };
+    return { needFollowup: false, summary: buildGoalSummary(state) };
   });
 
   app.post<{ Params: { id: string } }>("/projects/:id/plan", async (request) => {

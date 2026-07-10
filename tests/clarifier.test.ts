@@ -1,58 +1,58 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { parse } from "yaml";
 
-import { appendClarification, buildGoalSummary, nextClarificationQuestion } from "../src/clarifier.js";
-import { FakeLlmClient, fakeClarifierQuestion } from "../src/fake-llm.js";
-import { createProject, getProject } from "../src/project-store.js";
+import { generateClarifyBatch, reviewClarifications, buildGoalSummary } from "../src/clarifier.js";
+import { FakeLlmClient } from "../src/fake-llm.js";
+import { createProject, getProject, saveProjectState } from "../src/project-store.js";
 
-test("nextClarificationQuestion uses LLM to generate a question", async () => {
-  const root = await mkdtemp(join(tmpdir(), "verana-clarify-llm-"));
+test("generateClarifyBatch: LLM 生成多个问题,代码去重", async () => {
+  const root = await mkdtemp(join(tmpdir(), "verana-clarify-batch-"));
   const project = await createProject(root, "调研海外红人监控系统");
-  const client = new FakeLlmClient(() => ({ json: fakeClarifierQuestion() }));
-
-  const question = await nextClarificationQuestion(await getProject(root, project.id), client);
-
-  assert.equal(question?.question, "你要监控哪些平台?");
-  assert.equal(question?.risk.includes("偏掉"), true);
-  assert.equal(client.calls.length, 1);
-  assert.equal(client.calls[0]?.role, "composer");
+  const client = new FakeLlmClient(() => ({
+    json: {
+      questions: [
+        { dimension: "平台", question: "你要监控哪些平台?", risk: "不澄清会偏掉" },
+        { dimension: "规模", question: "监控多少个红人?", risk: "影响方案选型" },
+        { dimension: "平台", question: "你要监控哪些平台?", risk: "重复" }, // 重复,应被去重
+      ],
+    },
+  }));
+  const batch = await generateClarifyBatch(await getProject(root, project.id), client);
+  assert.equal(batch.questions.length, 2); // 第三个重复被去掉
+  assert.equal(batch.questions[0]?.dimension, "平台");
+  assert.equal(batch.questions[1]?.dimension, "规模");
 });
 
-test("nextClarificationQuestion returns null when LLM says done", async () => {
-  const root = await mkdtemp(join(tmpdir(), "verana-clarify-done-"));
-  const project = await createProject(root, "目标足够清晰");
-  const client = new FakeLlmClient(() => ({ json: { done: true } }));
-
-  const question = await nextClarificationQuestion(await getProject(root, project.id), client);
-
-  assert.equal(question, null);
-});
-
-test("appendClarification records the answer with risk", async () => {
-  const root = await mkdtemp(join(tmpdir(), "verana-clarify-append-"));
+test("reviewClarifications: 不需要追问", async () => {
+  const root = await mkdtemp(join(tmpdir(), "verana-clarify-review-"));
   const project = await createProject(root, "调研海外红人监控系统");
   const state = await getProject(root, project.id);
-  const next = fakeClarifierQuestion();
-
-  const updated = appendClarification(state, "YouTube 和 TikTok", next);
-
-  assert.equal(updated.status.clarifier?.clarifications.length, 1);
-  assert.equal(updated.status.clarifier?.clarifications[0]?.a, "YouTube 和 TikTok");
-  assert.equal(updated.status.clarifier?.clarifications[0]?.risk, next.risk);
+  state.status.clarifier = {
+    status: "clarifying",
+    clarifications: [
+      { q: "监控哪些平台?", a: "YouTube和TikTok", risk: "" },
+      { q: "监控多少个?", a: "几百个", risk: "" },
+    ],
+  };
+  await saveProjectState(root, state);
+  const client = new FakeLlmClient(() => ({ json: { need_followup: false } }));
+  const review = await reviewClarifications(state, client);
+  assert.equal(review.needFollowup, false);
+  assert.equal(review.questions.length, 0);
 });
 
 test("buildGoalSummary includes all clarifications", async () => {
   const root = await mkdtemp(join(tmpdir(), "verana-clarify-summary-"));
   const project = await createProject(root, "调研海外红人监控系统");
   const state = await getProject(root, project.id);
-  const updated = appendClarification(state, "YouTube", fakeClarifierQuestion());
-
-  const summary = buildGoalSummary(updated);
-
+  state.status.clarifier = {
+    status: "clarifying",
+    clarifications: [{ q: "平台?", a: "YouTube", risk: "不澄清偏掉" }],
+  };
+  const summary = buildGoalSummary(state);
   assert.match(summary, /# Goal Confirmation/);
   assert.match(summary, /YouTube/);
   assert.match(summary, /偏掉/);
