@@ -74,18 +74,26 @@ export function renderHomePage(): string {
   </style>
 </head>
 <body>
-  <header><h1>Verana</h1><div class="muted" id="connection">SSE: idle</div></header>
+  <header><div style="display:flex;align-items:center;gap:8px"><button id="sidebarToggle" style="padding:4px 8px;font-size:14px;cursor:pointer;border:1px solid var(--border);background:var(--panel);color:var(--text);border-radius:4px">&#9776;</button><h1>Verana</h1></div><div class="muted" id="connection">SSE: idle</div></header>
   <main>
-    <section style="border-right:1px solid var(--border); display:flex; flex-direction:column;">
+    <section id="sidebar" style="width:240px; border-right:1px solid var(--border); display:flex; flex-direction:column; transition: width 0.2s; overflow:hidden;">
       <div class="section-title">Projects</div>
-      <div class="body stack" style="flex:1;">
-        <textarea id="goal" placeholder="输入目标,例如: 调研海外红人监控系统" style="min-height:48px;"></textarea>
-        <button id="createBtn">创建项目</button>
-        <div id="projects"></div>
-      </div>
+      <div id="projects" style="flex:1; overflow-y:auto; padding:8px;"></div>
     </section>
     <section style="display:flex; flex-direction:column;">
-      <div id="empty" class="body muted">选择或创建一个项目。</div>
+      <div id="empty" class="body" style="flex:1; overflow-y:auto; padding:20px; max-width:640px; margin:0 auto;">
+        <div class="guide">
+          <div class="guide-title">创建项目</div>
+          <div class="guide-desc">输入项目名称和目标,系统会通过澄清、规划、执行帮你完成。</div>
+          <div style="margin-top:12px">
+            <div class="muted" style="margin-bottom:4px">项目名称</div>
+            <input id="projectName" placeholder="例如:海外红人监控系统调研" style="width:100%; padding:8px; margin-bottom:10px; background:var(--panel); border:1px solid var(--border); color:var(--text); border-radius:4px;" />
+            <div class="muted" style="margin-bottom:4px">项目目标</div>
+            <textarea id="goal" placeholder="详细描述目标,例如:调研海外红人监控系统,了解有哪些方案、功能、价格" style="min-height:80px; width:100%; background:var(--panel); border:1px solid var(--border); color:var(--text); border-radius:4px; padding:8px;"></textarea>
+            <button id="createBtn" style="margin-top:8px;">创建项目</button>
+          </div>
+        </div>
+      </div>
       <div id="detail" style="display:none; flex:1; overflow-y:auto; padding:14px;">
         <div class="steps" id="steps"></div>
         <div id="mainArea"></div>

@@ -105,7 +105,7 @@ async function post(path, body = {}) { return api(path, { method:'POST', body: J
 
 async function loadProjects() {
   const projects = await api('/projects');
-  $('projects').innerHTML = projects.map(p => '<div class="project '+(p.id===selectedId?'active':'')+'"><div class="row" style="justify-content:space-between"><div data-id="'+escapeHtml(p.id)+'"><b>'+escapeHtml(p.id)+'</b></div><button class="bad del-btn" data-id="'+escapeHtml(p.id)+'" style="padding:2px 8px;font-size:11px">删除</button></div><div class="muted" data-id="'+escapeHtml(p.id)+'">'+escapeHtml(p.status)+'</div><div class="muted" data-id="'+escapeHtml(p.id)+'" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(p.goal)+'</div></div>').join('');
+  $('projects').innerHTML = projects.map(p => '<div class="project '+(p.id===selectedId?'active':'')+'"><div class="row" style="justify-content:space-between"><div data-id="'+escapeHtml(p.id)+'" style="flex:1;min-width:0"><b>'+escapeHtml(p.name||p.id)+'</b></div><button class="bad del-btn" data-id="'+escapeHtml(p.id)+'" style="padding:2px 8px;font-size:11px;flex-shrink:0">删除</button></div><div class="muted" data-id="'+escapeHtml(p.id)+'" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(p.goal||'')+'</div></div>').join('');
   document.querySelectorAll('.project [data-id]').forEach(el => el.addEventListener('click', () => selectProject(el.dataset.id)));
   document.querySelectorAll('.del-btn').forEach(el => el.addEventListener('click', (e) => { e.stopPropagation(); doDelete(el.dataset.id); }));
 }
@@ -947,7 +947,11 @@ function markdownToHtml(md) {
   return html;
 }
 
-$('createBtn').onclick = async () => { const goal = $('goal').value.trim(); if (!goal) return; setBusy(true); try { const created = await post('/projects', { goal }); selectedId = created.project.id; $('goal').value=''; await loadProjects(); await selectProject(selectedId); } catch(e) { alert(e.message); } setBusy(false); };
+$('createBtn').onclick = async () => { const name = $('projectName').value.trim(); const goal = $('goal').value.trim(); if (!name || !goal) { alert('请填写项目名称和目标'); return; } setBusy(true); try { const created = await post('/projects', { name, goal }); selectedId = created.project.id; $('projectName').value=''; $('goal').value=''; await loadProjects(); await selectProject(selectedId); } catch(e) { alert(e.message); } setBusy(false); };
+const sidebar = document.getElementById('sidebar');
+let sidebarCollapsed = false;
+document.getElementById('sidebarToggle').onclick = () => { sidebarCollapsed = !sidebarCollapsed; if (sidebar) { sidebar.style.width = sidebarCollapsed ? '0px' : '240px'; } };
+
 loadProjects().then(() => {
   // 从 URL hash 恢复选中的项目(刷新后保持原界面)
   const hashId = decodeURIComponent(location.hash.slice(1));

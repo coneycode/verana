@@ -147,6 +147,7 @@ export type RunResult = "passed" | "failed" | "needs_input";
 
 export interface ProjectRecord {
   id: string;
+  name?: string;
   goal: string;
   status: ProjectStatus;
   created_at: string;

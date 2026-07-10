@@ -224,17 +224,19 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     return merged;
   });
 
-  app.post<{ Body: { goal: string } }>("/projects", async (request) => {
+  app.post<{ Body: { goal: string; name?: string } }>("/projects", async (request) => {
     const { createProject } = await import("./project-store.js");
-    // Generate a short Chinese title for the project ID
-    let title: string | undefined;
-    try {
-      const raw = await client.complete("composer",
-        "你是一个项目命名助手。根据用户的目标,生成一个2-6字的中文摘要作为项目名。只输出摘要本身,不要任何额外文字或标点。",
-        `目标: ${request.body.goal}`);
-      title = raw.trim().replace(/^["'"']|["'"']$/g, "");
-    } catch (e) {
-      console.log("[create] title generation failed, using fallback:", (e as Error).message);
+    // 用户传了 name 就用,没传就 LLM 生成
+    let title: string | undefined = request.body.name?.trim();
+    if (!title) {
+      try {
+        const raw = await client.complete("composer",
+          "你是一个项目命名助手。根据用户的目标,生成一个2-6字的中文摘要作为项目名。只输出摘要本身,不要任何额外文字或标点。",
+          `目标: ${request.body.goal}`);
+        title = raw.trim().replace(/^["'"]|["'"]$/g, "");
+      } catch (e) {
+        console.log("[create] title generation failed, using fallback:", (e as Error).message);
+      }
     }
     const project = await createProject(options.rootDir, request.body.goal, title);
     console.log(`[create] project ${project.id} (goal: ${request.body.goal.slice(0, 40)})`);

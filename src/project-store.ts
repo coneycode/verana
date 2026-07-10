@@ -13,6 +13,7 @@ export async function createProject(rootDir: string, rawGoal: string, title?: st
 
   const project: ProjectRecord = {
     id,
+    name: title,
     goal: rawGoal,
     status: "created",
     created_at: createdAt,
