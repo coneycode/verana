@@ -80,6 +80,11 @@ export async function planGraphWorkflow(
   const goal = state.project.goal;
   const clarifications = state.status.clarifier?.clarifications ?? [];
 
+  // 标记为 composing(前端据此显示进度)
+  state.project.status = "composing";
+  await saveProjectState(rootDir, state);
+  bus?.publish(projectEvent("status_changed", projectId, { status: "composing" }));
+
   // 机械重生成循环:Composer 生成 → 硬校验 → 充分性检查 → 有问题带问题清单重生成
   const MAX_REGEN = Number(process.env.VERANA_MAX_REGEN ?? 3);
   let lastIssues: string = "";

@@ -700,8 +700,17 @@ async function doAnswer() {
 
 async function doPlan() {
   setBusy(true);
-  try { await post('/projects/'+selectedId+'/plan', {}); await refresh(); }
-  catch(e) { alert(e.message); }
+  try {
+    const res = await post('/projects/'+selectedId+'/plan', {});
+    // fire-and-forget: 后端返回 { status: "composing" },plan 在后台跑
+    // 通过 SSE plan_progress 事件看进度,plan_composed 事件触发 refresh
+    if (res && res.status === 'composing') {
+      // 等 SSE 事件驱动,不主动 refresh(plan 还没完成)
+    } else {
+      // 传 spec 模式可能直接返回
+      await refresh();
+    }
+  } catch(e) { alert(e.message); }
   setBusy(false);
 }
 

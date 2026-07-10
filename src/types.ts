@@ -1,5 +1,6 @@
 export type ProjectStatus =
   | "created"
+  | "composing"
   | "solutioning"
   | "solution_approved"
   | "implementing"
