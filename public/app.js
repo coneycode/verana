@@ -774,8 +774,12 @@ async function doSaveSpec() {
 
 async function doApprove(gate) {
   setBusy(true);
-  try { await post('/projects/'+selectedId+'/approve', { gate, note: 'UI approve '+gate }); await refresh(); }
-  catch(e) { alert(e.message); }
+  try {
+    await post('/projects/'+selectedId+'/approve', { gate, note: 'UI approve '+gate });
+    await refresh();
+    // plan_review 通过后自动触发执行
+    if (gate === 'plan_review') { await doRun(); }
+  } catch(e) { alert(e.message); }
   setBusy(false);
 }
 
@@ -884,7 +888,10 @@ function connectEvents() {
   source.addEventListener('plan_progress', (event) => {
     const data = JSON.parse(event.data);
     const p = data.payload || {};
-    if (p.message) setPlanProgress(p.message);
+    if (p.message) {
+      setPlanProgress(p.message);
+      refresh();
+    }
   });  // 全流程步骤事件 → liveFeed
   source.addEventListener('node_selected', (event) => {
     const data = JSON.parse(event.data);
