@@ -129,7 +129,20 @@ async function selectProject(id) {
 
 async function refresh() {
   if (!selectedId) return;
-  state = await api('/projects/'+selectedId);
+  try {
+    state = await api('/projects/'+selectedId);
+  } catch(e) {
+    // 项目不存在(被删/损坏),回首页
+    selectedId = null;
+    state = null;
+    workflowSpec = null;
+    timelineBlocks = [];
+    history.replaceState(null, '', '#');
+    $('detail').style.display = 'none';
+    $('empty').style.display = 'block';
+    await loadProjects();
+    return;
+  }
   const phase = getPhase();
   if (phase && !['created','clarifying'].includes(phase) && !workflowSpec) {
     try { workflowSpec = await api('/projects/'+selectedId+'/workflow'); } catch(e) { workflowSpec = null; }
@@ -847,6 +860,17 @@ function connectEvents() {
   source.onopen = () => $('connection').textContent = 'SSE: connected';
   source.onerror = () => $('connection').textContent = 'SSE: disconnected';
   ['snapshot','project_created','plan_composed','plan_progress','gate_approved','gate_rejected','run_completed','run_failed','input_recorded','status_changed','blackboard_updated','human_required','human_verdict','verdict'].forEach(type => source.addEventListener(type, () => { refresh(); }));
+  source.addEventListener('project_deleted', (event) => {
+    const data = JSON.parse(event.data);
+    const deletedId = data.payload?.projectId || data.project_id;
+    if (deletedId === selectedId) {
+      selectedId = null; state = null; workflowSpec = null; timelineBlocks = [];
+      history.replaceState(null, '', '#');
+      $('detail').style.display = 'none';
+      $('empty').style.display = 'block';
+    }
+    loadProjects();
+  });
   source.addEventListener('plan_progress', (event) => {
     const data = JSON.parse(event.data);
     const p = data.payload || {};

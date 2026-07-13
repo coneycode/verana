@@ -47,7 +47,17 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
 
   app.get("/projects", async () => listProjects(options.rootDir));
 
-  app.get<{ Params: { id: string } }>("/projects/:id", async (request) => getProject(options.rootDir, request.params.id));
+  app.get<{ Params: { id: string } }>("/projects/:id", async (request, reply) => {
+    try {
+      return await getProject(options.rootDir, request.params.id);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+        reply.code(404).send({ statusCode: 404, error: "Not Found", message: `Project ${request.params.id} not found` });
+        return;
+      }
+      throw e;
+    }
+  });
 
   app.delete<{ Params: { id: string } }>("/projects/:id", async (request) => {
     await deleteProject(options.rootDir, request.params.id);
