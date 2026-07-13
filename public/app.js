@@ -693,18 +693,17 @@ async function doClarify() {
   setBusy(false);
 }
 
-async function doAnswer() {
-  const answer = $('answer')?.value.trim();
-  if (!answer) return;
+async function doClarifyAnswer(count) {
+  const answers = [];
+  for (let i = 0; i < count; i++) {
+    const el = $('answer_'+i);
+    if (el) answers.push({ q: el.dataset.q, a: el.value.trim() });
+  }
+  if (answers.some(a => !a.a)) { alert('请回答所有问题'); return; }
   setBusy(true);
   try {
-    const r = await post('/projects/'+selectedId+'/input', { answer });
-    state = r.state;
-    render();
-    await loadProjects();
-    if (r.next_question) {
-      const qEl = $('answer'); if (qEl) qEl.value = '';
-    }
+    const res = await post('/projects/'+selectedId+'/clarify-answer', { answers });
+    await refresh();
   } catch(e) { alert(e.message); }
   setBusy(false);
 }
