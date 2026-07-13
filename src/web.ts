@@ -8,6 +8,7 @@ export function renderHomePage(): string {
   <style>
     :root { --bg:#060d1a; --panel:#0b1222; --border:#293a57; --text:#dbeafe; --muted:#64748b; --accent:#3b82f6; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; }
     * { box-sizing:border-box; margin:0; padding:0; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     body { font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
     header { display:flex; justify-content:space-between; align-items:center; padding:14px 18px; background:#0a1424; border-bottom:1px solid var(--border); }
     header h1 { font-size:17px; font-weight:700; }
@@ -74,7 +75,7 @@ export function renderHomePage(): string {
   </style>
 </head>
 <body>
-  <header><div style="display:flex;align-items:center;gap:8px"><button id="sidebarToggle" style="padding:4px 8px;font-size:14px;cursor:pointer;border:1px solid var(--border);background:var(--panel);color:var(--text);border-radius:4px">&#9776;</button><h1>Verana</h1></div><div class="muted" id="connection">SSE: idle</div></header>
+  <header><div style="display:flex;align-items:center;gap:8px"><button id="sidebarToggle" style="padding:4px 8px;font-size:14px;cursor:pointer;border:1px solid var(--border);background:var(--panel);color:var(--text);border-radius:4px">&#9776;</button><h1>Verana</h1></div><div class="muted" id="connection">SSE: idle</div><div id="llmStatusBar" style="display:none;align-items:center;gap:6px;padding:2px 8px;background:#1a1f2e;border:1px solid #3b82f6;border-radius:4px;font-size:12px;color:#93c5fd"><span style="display:inline-block;width:10px;height:10px;border:2px solid #3b82f6;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite"></span><span class="llm-status-text">LLM</span></div></header>
   <main>
     <section id="sidebar" style="width:240px; border-right:1px solid var(--border); display:flex; flex-direction:column; transition: width 0.2s; overflow:hidden;">
       <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">Projects <button id="newProjectBtn" style="font-size:11px;padding:2px 8px;border:1px solid var(--border);background:var(--panel);color:var(--text);border-radius:4px;cursor:pointer">新建</button></div>

@@ -57,10 +57,48 @@ function normalizeRole(raw: Partial<ModelConfig> | undefined, role: ModelRole): 
   return { role, base_url: raw.base_url, model: raw.model, api_key: raw.api_key };
 }
 
+export type LlmStatusCallback = (status: { phase: "calling" | "done" | "error"; role: string; description: string }) => void;
+
+// 全局 LLM 状态回调 — server 启动时设置,所有 LLM 调用自动推送状态
+let globalLlmStatusCb: LlmStatusCallback | null = null;
+export function setLlmStatusCallback(cb: LlmStatusCallback | null) { globalLlmStatusCb = cb; }
+
+// 根据 system prompt 推断 LLM 调用的用途描述
+function inferLlmDescription(role: string, system: string): string {
+  const s = system.slice(0, 200);
+  if (s.includes("澄清助手") || s.includes("方案澄清")) return "生成澄清问题";
+  if (s.includes("澄清审核者")) return "校验澄清是否完整";
+  if (s.includes("workflow 规划者") || s.includes("Composer")) return "Composer 规划能力清单";
+  if (s.includes("规划充分性检查器")) return "充分性检查(路径/指令/验收)";
+  if (s.includes("调度大脑") || s.includes("scheduler")) return "调度大脑决策下一步";
+  if (s.includes("归因者") || s.includes("diagnostician")) return "归因分析失败根因";
+  if (s.includes("安全护栏")) return "软护栏安全检查";
+  if (s.includes("验收者") || s.includes("verifier")) return "验证节点产出";
+  if (s.includes("产出规整器")) return "规整产出(去对话外壳)";
+  if (s.includes("交叉验证") || s.includes("独立验证者")) return "交叉验证轻节点";
+  if (s.includes("更新记忆") || s.includes("blackboard")) return "更新记忆";
+  if (s.includes("执行者") || s.includes("executor")) return "执行节点任务";
+  if (s.includes("项目命名")) return "生成项目名称";
+  return `${role} 调用中`;
+}
+
 export class HttpLlmClient implements LlmClient {
   constructor(private readonly config: VeranaConfig) {}
 
   async complete(role: ModelRole, system: string, user: string, onDelta?: (delta: string) => void): Promise<string> {
+    const desc = inferLlmDescription(role, system);
+    globalLlmStatusCb?.({ phase: "calling", role, description: desc });
+    try {
+      const result = await this._doComplete(role, system, user, onDelta);
+      globalLlmStatusCb?.({ phase: "done", role, description: desc });
+      return result;
+    } catch (e) {
+      globalLlmStatusCb?.({ phase: "error", role, description: desc });
+      throw e;
+    }
+  }
+
+  private async _doComplete(role: ModelRole, system: string, user: string, onDelta?: (delta: string) => void): Promise<string> {
     const cfg = this.config[role];
     const url = `${cfg.base_url.replace(/\/$/, "")}/v1/messages`;
     const body: Record<string, unknown> = {

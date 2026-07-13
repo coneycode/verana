@@ -860,6 +860,16 @@ function connectEvents() {
   source.onopen = () => $('connection').textContent = 'SSE: connected';
   source.onerror = () => $('connection').textContent = 'SSE: disconnected';
   ['snapshot','project_created','plan_composed','plan_progress','gate_approved','gate_rejected','run_completed','run_failed','input_recorded','status_changed','blackboard_updated','human_required','human_verdict','verdict'].forEach(type => source.addEventListener(type, () => { refresh(); }));
+  source.addEventListener('llm_status', (event) => {
+    const data = JSON.parse(event.data);
+    const s = data.payload || {};
+    const el = document.getElementById('llmStatusBar');
+    if (s.phase === 'calling') {
+      if (el) { el.style.display = 'flex'; el.querySelector('.llm-status-text').textContent = s.description; }
+    } else if (s.phase === 'done' || s.phase === 'error') {
+      if (el) { el.style.display = 'none'; }
+    }
+  });
   source.addEventListener('project_deleted', (event) => {
     const data = JSON.parse(event.data);
     const deletedId = data.payload?.projectId || data.project_id;

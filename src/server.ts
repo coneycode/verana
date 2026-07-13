@@ -6,7 +6,7 @@ import { parse } from "yaml";
 
 import { generateClarifyBatch, reviewClarifications, buildGoalSummary, type ClarificationEntry } from "./clarifier.js";
 import { EventBus, projectEvent } from "./events.js";
-import { HttpLlmClient, loadConfig, type LlmClient } from "./llm.js";
+import { HttpLlmClient, loadConfig, setLlmStatusCallback, type LlmClient } from "./llm.js";
 import { approveGate, deleteProject, getProject, listProjects, projectPath, rejectGate, saveProjectState } from "./project-store.js";
 import { composeGraphWorkflow, planGraphWorkflow } from "./pipeline.js";
 import { runGraphProject, applyHumanVerdict } from "./graph-engine.js";
@@ -34,6 +34,16 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   });
   const bus = options.bus ?? new EventBus();
   const client = options.client ?? new HttpLlmClient(await loadConfig());
+
+  // 全局 LLM 状态回调 — 推给 SSE(* 通配),前端实时看到"LLM 在干什么"
+  setLlmStatusCallback((status) => {
+    bus.publish({
+      type: "llm_status",
+      project_id: "*",
+      at: new Date().toISOString(),
+      payload: status,
+    });
+  });
 
   // 静态文件:app.js
   app.get("/app.js", async (_request, reply) => {
@@ -290,7 +300,11 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     const unsubscribe = bus.subscribe(request.params.id, (event) => {
       reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
     });
-    request.raw.on("close", unsubscribe);
+    // 也订阅通配事件(LLM 状态等全局事件)
+    const unsubscribeAll = bus.subscribe("*", (event) => {
+      reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    });
+    request.raw.on("close", () => { unsubscribe(); unsubscribeAll(); });
   });
 
   return app;
