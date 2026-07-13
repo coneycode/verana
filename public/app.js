@@ -90,7 +90,7 @@ const STEPS = [
   { key: 'created', label: '创建', n: 1 },
   { key: 'clarifying', label: '澄清', n: 2 },
   { key: 'composing', label: '规划', n: 3 },
-  { key: 'plan_review', label: '规划', n: 3 },
+  { key: 'plan_review', label: '', n: 3 },
   { key: 'executing', label: '执行', n: 4 },
   { key: 'final_review', label: '审方案', n: 5 },
   { key: 'approved', label: '完成', n: 6 },
@@ -162,7 +162,7 @@ function renderSteps() {
   const phase = getPhase();
   const order = STEPS.map(s => s.key);
   const idx = order.indexOf(phase);
-  $('steps').innerHTML = STEPS.map((s, i) => {
+  $('steps').innerHTML = STEPS.filter(s => s.label).map((s, i) => {
     let cls = '';
     let clickable = false;
     if (idx === -1) { cls = i === 0 ? 'done' : ''; clickable = i === 0; }
@@ -688,7 +688,7 @@ async function maybeAutoStartClarify() {
 
 async function doClarify() {
   setBusy(true);
-  try { await post('/projects/'+selectedId+'/clarify'); await refresh(); }
+  try { await post('/projects/'+selectedId+'/clarify-batch'); await refresh(); }
   catch(e) { alert(e.message); }
   setBusy(false);
 }
