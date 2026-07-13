@@ -141,7 +141,7 @@ async function refresh() {
 function getPhase() {
   if (!state) return 'created';
   const clarifier = state.status.clarifier;
-  if (clarifier && !state.status.workflows.solution) return 'clarifying';
+  if (clarifier && clarifier.status !== 'goal_confirmed' && !state.status.workflows.solution) return 'clarifying';
   const wf = state.status.workflows.solution;
   if (!wf) return state.project.status;
   return wf.workflow_status;
@@ -703,7 +703,8 @@ async function doClarifyAnswer(count) {
   setBusy(true);
   try {
     const res = await post('/projects/'+selectedId+'/clarify-answer', { answers });
-    await refresh();
+    if (res && res.needFollowup) { await refresh(); }
+    else { await doPlan(); }
   } catch(e) { alert(e.message); }
   setBusy(false);
 }
