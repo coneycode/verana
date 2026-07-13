@@ -683,7 +683,7 @@ async function loadDeliverables() {
 
 async function maybeAutoStartClarify() {
   const phase = getPhase();
-  if (phase === 'created' && !state.status.clarifier?.current_question) { await doClarify(); }
+  if (phase === 'created' && !state.status.clarifier?.pending_batch) { await doClarify(); }
 }
 
 async function doClarify() {
