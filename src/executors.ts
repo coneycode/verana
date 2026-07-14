@@ -60,6 +60,7 @@ export class HermesAdapter implements ExecutorAdapter {
       "-q", prompt,
       "--max-turns", String(maxTurns),
       "-t", toolsets.join(","),
+      "--yolo",  // 无人值守:跳过命令审批,避免 curl 等命令被拦截超时
       // 不加 -Q:保留工具调用过程输出(web_search/browser 预览),实时推给前端
     ];
 

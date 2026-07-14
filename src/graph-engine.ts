@@ -330,7 +330,7 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     // 测试环境(fake executor)用短 timeout;真实 hermes 用 10min
     const isFake = adapter.name !== "hermes";
     const agentRun = await adapter.execute(promptParts.join("\n"), dir, {
-      maxTurns: 90, toolsets: ["web", "browser", "file"], timeoutMs: isFake ? 30_000 : 600_000,
+      maxTurns: 90, toolsets: ["web", "browser", "terminal", "file"], timeoutMs: isFake ? 30_000 : 600_000,
       onOutputLine: (line) => {
         // hermes 的每一行输出实时推给前端(工具调用过程 + 最终输出)
         if (line.trim()) bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", delta: line + "\n" }));
