@@ -83,7 +83,7 @@ export async function runCli(argv: string[], output: Output = console.log, clien
   }
 
   if (command === "input") {
-    output("批量澄清请通过 Web UI 操作(http://localhost:8787)");
+    output("批量澄清请通过 Web UI 操作(http://127.0.0.1:3317)");
     return;
   }
 
