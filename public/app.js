@@ -84,7 +84,7 @@ const $ = (id) => document.getElementById(id);
 let viewMode = null;
 let planProgress = '';
 
-function setPlanProgress(msg) { planProgress = msg; const el = document.getElementById('planProgressMsg'); if (el) el.textContent = msg; }
+function setPlanProgress(msg) { planProgress = msg; const el = document.getElementById('planProgressMsg'); if (el) el.textContent = msg; console.log('[plan_progress]', msg); }
 
 const STEPS = [
   { key: 'created', label: '创建', n: 1 },
@@ -144,7 +144,7 @@ async function refresh() {
     return;
   }
   const phase = getPhase();
-  if (phase && !['created','clarifying'].includes(phase) && !workflowSpec) {
+  if (phase && !['created','clarifying','composing'].includes(phase) && !workflowSpec) {
     try { workflowSpec = await api('/projects/'+selectedId+'/workflow'); } catch(e) { workflowSpec = null; }
   }
   render();
