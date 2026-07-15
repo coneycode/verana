@@ -6,7 +6,7 @@
 
 Verana 是一个**项目制 Agent Workflow 交付脚手架**(v2)。
 v1 方案交付闭环已实现并端到端验证通过(真实 LLM)。代码在 src/,设计文档在 docs/design/。
-当前迭代:补齐设计已定但未实现的 gap(Executor 适配层、Composer 三层自检、Verifier 自动重跑等)。
+当前迭代:动态调度闭环已落地,重点打磨 Web 控制面、执行时间线、plan_review 重跑、claim/deliverable 提取与人审恢复体验。
 
 ## 核心工作流:设计文档驱动
 

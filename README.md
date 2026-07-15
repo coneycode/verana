@@ -4,13 +4,13 @@ Verana v2 is a project-based Agent Workflow delivery scaffold.
 
 Current scope: solution-delivery loop (clarify → compose → execute → verify → gate).
 
-Status: v1 implemented and end-to-end verified with real LLM.
+Status: v2 graph workflow implementation is active. The dynamic scheduler, event-log timeline, verdict-driven progress truth, diagnostician failure attribution, plan self-check loop, Hermes executor path, and Web/SSE control plane are implemented and being refined.
 
 ## Quick Start
 
 ```sh
 npm install
-npm test          # 19 tests
+npm test
 npm run typecheck
 
 cp verana.config.example.yaml verana.config.yaml  # fill in your models + keys
@@ -55,13 +55,17 @@ To switch to OpenAI-compatible API, replace HttpLlmClient in llm.ts.
 - POST /projects — create project
 - GET /projects — list all
 - GET /projects/:id — get state
-- POST /projects/:id/clarify — get next clarification question
-- POST /projects/:id/input — answer clarification
-- POST /projects/:id/plan — compose workflow
+- POST /projects/:id/clarify-batch — generate clarification questions
+- POST /projects/:id/clarify-answer — submit clarification answers
+- POST /projects/:id/plan — compose graph workflow (SSE progress)
+- PUT /projects/:id/workflow — edit plan_review workflow spec
 - POST /projects/:id/approve — approve a gate
 - POST /projects/:id/reject — reject a gate (bounce)
-- POST /projects/:id/run — execute DAG
-- GET /projects/:id/runs/:run — get claim + verdict
+- POST /projects/:id/run — execute graph workflow
+- POST /projects/:id/human-verdict — resolve human-review stop
+- POST /projects/:id/rerun-from — reset and rerun from a phase
+- GET /projects/:id/timeline — rebuild timeline from events.log
+- GET /projects/:id/runs/:run — get claim, verdict, and stream log
 - GET /projects/:id/events — SSE event stream
 
 ## Design Source Of Truth

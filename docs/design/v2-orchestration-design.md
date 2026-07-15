@@ -1,8 +1,8 @@
 # Verana — 项目制 Agent Workflow 交付脚手架 设计文档
 
-状态: 核心执行模型重构为"图工作流 / 动态调度"(此前为静态 DAG,已推翻)
-版本: v0.4(执行模型重构 — 能力+护栏预定义、路径运行时实时生成)
-最后更新: 2026-07-02
+状态: 图工作流 / 动态调度闭环已进入实现打磨阶段(此前静态 DAG 已推翻)
+版本: v0.5(完备体系落地同步 — 事前自检 + 事后归因 + 控制面时间线)
+最后更新: 2026-07-15
 本文记录已锁定的设计决策。每节标注:
 [LOCKED] 已确认 · [DEFERRED] 推迟 · [PARTIAL] 部分实现 · [OUTLINE] 仅预留接口
 
@@ -389,11 +389,12 @@ scheduler 吃 verdict 事实、不吃 claim —— 这是死循环修复的根�
 - `runs/<run-id>/verdict.yaml` — verifier 独立判定(pass/fail + 理由 + 证据,真相)
 - UI 并排展示两者,显式暴露差距
 
-### FAIL 后自动重跑(有上限,会升级)
-- FAIL → verdict 差距说明作为反馈写进上下文,自动重跑
-- 重跑上限 2 次(比 Composer 的 3 次小,跑 agent 更耗时)
-- 超限仍 FAIL → 不再自动重跑,升级人工(此即调度大脑的"状态异常"→ 停,转人审)
-- 每次重跑一个新 run,留痕可见"为什么还不过"
+### FAIL 后归因路由(有上限,会升级)
+- FAIL → 每次先由 diagnostician 判单一主根因,不做盲目重试
+- 根因与 verdict 差距说明写进事件日志;下一轮 scheduler 读取进度真相与根因,选择重跑、换节点、补能力或转人审
+- `A_instruction_vague` / `C_context_error` 通常重跑同节点,指令携带失败反馈;`B_capability_gap` 触发 Composer 复核并可动态新增能力;`D_standard_unreasonable` / `E_goal_problem` 转人审
+- 重跑上限由 `guardrails.hard.max_retries_per_node` 控制(默认 3);超限仍 FAIL → 升级人工
+- 每次执行都是新 run,claim / deliverable / verdict / diagnosis 都留痕可见
 
 ---
 
@@ -531,22 +532,29 @@ selected(调度选中) → running → verifying → done
 替代原线性 for 循环。伪代码:
 
 ```
-current = 入口节点(Composer 指定或调度大脑首选)
 loop:
-  run = execute(current, blackboard)          # 跑节点,产出 claim(重)或结果(轻)
-  verdict = verify(run)                        # 重节点独立验证 / 轻节点交叉验证
-  append_event(...); snapshot()                # 落盘:日志追加 + 节点完成打快照
-  if 轻节点交叉验证不一致: 转人审; continue
-  if 重节点 verdict fail: 重跑(上限2)或升级人审
   check_hard_guardrails()                      # 碰硬护栏 → 强制停
-  check_soft_guardrails(独立模型)               # 碰软护栏 → 停,转人审
-  decision = scheduler(blackboard, run产出, 能力清单, 护栏)  # 调度大脑:下一步+理由
+  maybe_human_checkpoint()                     # 阶段性检查点 → 人审
+  progress_truth = buildProgressTruth(events)  # 从 verdict/diagnosis 事件机械折叠,不读 claim
+  decision = scheduler(progress_truth, blackboard, 能力清单, 护栏)  # 唯一调度出口
   append_event(decision)
-  switch decision:
-    能力缺口 → Composer 复核 → 新增节点继续 / 停问人
-    选中节点 → current = 该节点
-    完成标准满足 → workflow → final_review; break
-    状态异常 → 停,转人审; break
+  switch decision.action:
+    human → 停,转人审
+    skip_node → 记录跳过,继续调度
+    request_capability → Composer 复核 → 新增节点继续 / 停问人
+    is_complete=true → workflow → final_review; break
+    execute/retry/switch → node = decision.next_node
+  check_soft_guardrails(独立模型,node)          # 执行前软护栏 → 停,转人审
+  run = execute(node, blackboard)              # 跑节点,产出 claim + deliverable
+  verdict = verify(run.deliverable)            # 重节点独立验证 / 轻节点交叉验证
+  append_event(verdict)
+  if verdict fail:
+    diagnosis = diagnostician(verdict, claim, deliverable, instruction, blackboard)
+    append_event(diagnosis)
+    if retries_exhausted: 停,转人审
+    continue                                  # 下一轮由 scheduler 按根因路由
+  update_blackboard_if_needed()
+  append_event(node_done); snapshot()
 ```
 
 关键:每个节点完成 + verdict + 落盘 = 检查点。进程挂了从快照 + 日志恢复(第 5 节)。
@@ -630,8 +638,8 @@ interface ExecutorAdapter {
 
 - 形态:CLI 优先,后端 API + SSE 架构,Web 无缝接入
 - Web UI:Fastify 直供静态页,不引 React/Vite;执行阶段展示"轮次时间线"
-  (节点图 + 当前游标 + iteration)、右侧实时 LLM 输出(SSE stream)、
-  人审卡(四场景)、blackboard 面板
+  (scheduler_decision 与 node_selected 分离展示,刷新后可从 events.log 重建)、右侧实时 LLM 输出(SSE stream)、
+  人审卡(四场景)、blackboard 面板;规划阶段也通过 plan_progress 展示 Composer / sufficiency checker 的 LLM 输入输出
 - CLI 命令草案:
 ```
 verana new [目标]          # 创建项目,进澄清
@@ -644,8 +652,8 @@ verana run <id>            # 启动/继续(自动检测中断点续)
 verana logs <id> [run]     # 看 claim/verdict/日志 / 事件轨迹
 verana cancel <id>
 ```
-- SSE 事件:status_changed / node_selected(+理由)/ run_updated / verdict /
-  blackboard_updated / guardrail_hit / human_required / llm_stream
+- SSE 事件:status_changed / plan_progress / scheduler_decision / node_selected(+理由)/ run_created /
+  verdict / diagnosis / blackboard_updated / guardrail_hit / human_required / llm_stream / llm_status
 
 ---
 
@@ -685,6 +693,8 @@ verifier 主力 command/tests + anti-cheat、workdir git 隔离 + 每节点 diff
 ---
 
 ## 附录 A:设计项状态总览
+
+实现同步(2026-07-15):动态调度闭环已落地到 `src/graph-engine.ts` / `src/scheduler.ts` / `src/diagnostician.ts` / `src/event-log.ts` / `src/pipeline.ts` / `src/server.ts`。近期实现重点是控制面打磨:plan_progress 展示规划期 LLM 输入输出、events.log 重建 timeline、plan_review rerun 清理 workflow/runs/events 并重触发 plan、claim 直接作为 deliverable 避免 regularize 过度清洗、scheduler_decision 与 node_selected 分离以避免 UI 重复失败。
 
 核心执行模型(本次重构):
 - [x] 0. 重构动机
