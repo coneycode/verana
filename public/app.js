@@ -505,7 +505,7 @@ function toggleBlock(i) {
 function rebuildTimelineFromEvents(events) {
   timelineBlocks = [];
   for (const e of events) {
-    if (e.type === 'node_selected' || (e.type === 'run_created' && e.node)) {
+    if (e.type === 'node_selected') {
       // node_selected 事件:创建/更新 block
       const nodeId = e.node || '';
       const desc = workflowSpec?.capabilities?.find(c => c.id === nodeId)?.desc || nodeId;
@@ -513,6 +513,10 @@ function rebuildTimelineFromEvents(events) {
       const existing = timelineBlocks.find(b => b.nodeId === nodeId && b.status === 'running');
       if (existing) { existing.status = 'failed'; }
       timelineBlocks.push({ nodeId, desc, runId, status: 'running', reason: e.reason || '', llmOutput: '', _expanded: false });
+    } else if (e.type === 'run_created') {
+      // 只更新已有 block 的 runId
+      const running = [...timelineBlocks].reverse().find(b => b.nodeId === e.node && b.status === 'running');
+      if (running && e.run_id) running.runId = e.run_id;
     } else if (e.type === 'verdict') {
       const running = [...timelineBlocks].reverse().find(b => b.status === 'running');
       if (running) {
