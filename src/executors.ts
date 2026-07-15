@@ -104,7 +104,42 @@ export class HermesAdapter implements ExecutorAdapter {
           claimStart = 1;
           while (claimStart < lines.length && lines[claimStart].trim() === "") claimStart++;
         }
-        const claim = lines.slice(claimStart).join("\n").trim();
+
+        // 从 stdout 提取 hermes 的最终文字输出(╭─ ⚕ Hermes ─ 块)
+        // 工具调用日志(┊ 开头)不进 claim,留在 raw/stdream 里
+        const hermesBlocks: string[] = [];
+        let inBlock = false;
+        let blockContent: string[] = [];
+        for (const line of lines.slice(claimStart)) {
+          // 进入 hermes 输出块
+          if (line.includes("⚕ Hermes")) {
+            inBlock = true;
+            blockContent = [];
+            continue;
+          }
+          if (inBlock) {
+            // 块结束标记(╰ 开头)
+            if (line.startsWith("╰") || (line.startsWith("─") && line.length > 10)) {
+              hermesBlocks.push(blockContent.join("\n").trim());
+              inBlock = false;
+              continue;
+            }
+            blockContent.push(line);
+          }
+        }
+
+        // claim = hermes 的最终文字输出;如果没有 hermes 块(非交互模式/异常),降级用全部 stdout
+        let claim: string;
+        if (hermesBlocks.length > 0) {
+          claim = hermesBlocks.join("\n\n").trim();
+        } else {
+          // 降级:去掉工具日志行(┊ 开头),保留其余
+          claim = lines.slice(claimStart)
+            .filter(l => !l.trim().startsWith("┊") && !l.includes("BLOCKED:") && !l.includes("Timeout — denying"))
+            .join("\n")
+            .trim();
+        }
+
         resolve({
           claim,
           sessionId,
