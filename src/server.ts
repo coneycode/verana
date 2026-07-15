@@ -193,11 +193,17 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
       state.project.status = "created";
       state.status.workflows.solution = undefined;
     } else if (phase === "composing" || phase === "plan_review") {
-      // 重置到规划:清掉 workflow
+      // 重置到规划:清掉 workflow + runs + events
       state.status.workflows.solution = undefined;
-      state.project.status = "created";
-      // 清掉 solution 目录下的 workflow.yaml
-      try { await rm(join(projectPath(options.rootDir, request.params.id), "solution", "workflow.yaml")); } catch {}
+      state.project.status = "composing";
+      const solDir = join(projectPath(options.rootDir, request.params.id), "solution");
+      try { await rm(join(solDir, "workflow.yaml")); } catch {}
+      try { await rm(join(solDir, "events.log")); } catch {}
+      try { await rm(join(projectPath(options.rootDir, request.params.id), "runs"), { recursive: true, force: true }); } catch {}
+      // 重新触发 plan(fire-and-forget)
+      planGraphWorkflow(options.rootDir, request.params.id, client, bus)
+        .then(() => { bus.publish(projectEvent("plan_composed", request.params.id)); })
+        .catch((err: Error) => { bus.publish(projectEvent("run_failed", request.params.id, { error: err.message })); });
     } else if (phase === "executing") {
       // 重置到执行:清掉 runs/retries/blackboard,保留 spec
       const wf = state.status.workflows.solution;
