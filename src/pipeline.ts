@@ -92,7 +92,11 @@ export async function planGraphWorkflow(
   for (let attempt = 0; attempt < MAX_REGEN; attempt++) {
     bus?.publish(projectEvent("plan_progress", projectId, { step: "composing", attempt: attempt + 1, max: MAX_REGEN, message: `Composer 生成中(第${attempt + 1}次)...` }));
     const userPrompt = buildComposerPrompt(goal, clarifications) + (lastIssues ? `\n\n【上轮问题清单(请修复)】\n${lastIssues}` : "");
+    // 推 LLM 输入给前端
+    bus?.publish(projectEvent("plan_progress", projectId, { step: "llm_input", role: "composer", content: userPrompt.slice(0, 2000) }));
     const llmResult = await client.completeJson<ComposerLlmResult>("composer", COMPOSER_SYSTEM, userPrompt);
+    // 推 LLM 输出给前端
+    bus?.publish(projectEvent("plan_progress", projectId, { step: "llm_output", role: "composer", content: JSON.stringify(llmResult, null, 2).slice(0, 3000) }));
 
     const spec = assembleSpec(projectId, goal, llmResult);
     const validation = validateGraphWorkflow(spec);
@@ -106,6 +110,8 @@ export async function planGraphWorkflow(
     // 充分性检查(独立 evaluator,三层审查)
     bus?.publish(projectEvent("plan_progress", projectId, { step: "sufficiency_check", attempt: attempt + 1, message: `充分性检查中(路径/指令/验收)...` }));
     const sufficiency = await checkSufficiency(client, spec);
+    // 推充分性检查结果给前端
+    bus?.publish(projectEvent("plan_progress", projectId, { step: "sufficiency_result", content: JSON.stringify(sufficiency, null, 2).slice(0, 2000) }));
     const errors = (sufficiency.issues ?? []).filter(i => i.severity === "error");
     if (errors.length === 0) {
       // 通过!落盘

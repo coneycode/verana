@@ -82,6 +82,7 @@ const $ = (id) => document.getElementById(id);
 
 // 当前查看的阶段(null=跟随实际 phase,非null=回顾指定阶段)
 let viewMode = null;
+let planBlocks = [];
 let planProgress = '';
 
 function setPlanProgress(msg) { planProgress = msg; const el = document.getElementById('planProgressMsg'); if (el) el.textContent = msg; console.log('[plan_progress]', msg); }
@@ -118,6 +119,7 @@ async function selectProject(id) {
   streamContent = '';
   liveFeed = [];
   timelineBlocks = [];
+  planBlocks = [];
   viewMode = null;
   currentStreamRunId = null;
   $('empty').style.display='none';
@@ -318,7 +320,36 @@ function renderMain() {
 
   // --- Composing ---
   if (phase === 'composing') {
-    el.innerHTML = '<div class="guide"><div class="guide-title">合成 Workflow</div><div class="guide-desc" id="planProgressMsg">正在启动...</div></div>';
+    let html = '<div class="guide"><div class="guide-title">规划中</div><div class="guide-desc" id="planProgressMsg">正在启动...</div></div>';
+    if (planBlocks.length > 0) {
+      html += '<div style="margin-top:12px">';
+      for (const b of planBlocks) {
+        const isInput = b.step === 'llm_input';
+        const isOutput = b.step === 'llm_output';
+        const isResult = b.step === 'sufficiency_result';
+        const color = isInput ? '#3b82f6' : isOutput ? '#22c55e' : isResult ? '#a78bfa' : '#64748b';
+        const label = b.step === 'composing' ? 'Composer 生成' :
+                      b.step === 'llm_input' ? 'LLM 输入' :
+                      b.step === 'llm_output' ? 'LLM 输出' :
+                      b.step === 'sufficiency_check' ? '充分性检查' :
+                      b.step === 'sufficiency_result' ? '检查结果' :
+                      b.step === 'sufficiency_failed' ? '检查未通过' :
+                      b.step === 'hard_check_failed' ? '硬校验未通过' :
+                      b.step === 'done' ? '规划完成' : b.step;
+        html += '<div style="border:1px solid ' + color + ';border-radius:6px;margin-bottom:6px;overflow:hidden">';
+        html += '<div style="padding:6px 10px;background:#0d1626;cursor:pointer;color:' + color + ';font-size:13px;font-weight:bold" onclick="this.parentElement.querySelector(\'.pb-body\').style.display = this.parentElement.querySelector(\'.pb-body\').style.display === \'none\' ? \'block\' : \'none\'">' + escapeHtml(label) + '</div>';
+        if (b.content) {
+          html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;white-space:pre-wrap;word-break:break-word;color:#dbeafe;max-height:400px;overflow:auto;background:#050b17">' + escapeHtml(b.content) + '</div>';
+        } else if (b.message) {
+          html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;color:#dbeafe">' + escapeHtml(b.message) + '</div>';
+        } else {
+          html += '<div class="pb-body" style="display:none;padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;color:#64748b">(无内容)</div>';
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+    el.innerHTML = html;
     return;
   }
 
@@ -931,9 +962,44 @@ function connectEvents() {
   source.addEventListener('plan_progress', (event) => {
     const data = JSON.parse(event.data);
     const p = data.payload || {};
-    if (p.message) {
-      setPlanProgress(p.message);
-      refresh();
+    if (p.message) setPlanProgress(p.message);
+    if (p.step) planBlocks.push({ step: p.step, message: p.message || '', content: p.content || '' });
+    // 不调 refresh(避免 composing 阶段重建丢失 planBlocks),直接重渲染 composing
+    const phase = typeof getPhase === 'function' ? getPhase() : '';
+    if (phase === 'composing') {
+      const el = document.getElementById('mainArea');
+      if (el) {
+        let html = '<div class="guide"><div class="guide-title">规划中</div><div class="guide-desc" id="planProgressMsg">' + escapeHtml(planProgress) + '</div></div>';
+        if (planBlocks.length > 0) {
+          html += '<div style="margin-top:12px">';
+          for (const b of planBlocks) {
+            const isInput = b.step === 'llm_input';
+            const isOutput = b.step === 'llm_output';
+            const isResult = b.step === 'sufficiency_result';
+            const color = isInput ? '#3b82f6' : isOutput ? '#22c55e' : isResult ? '#a78bfa' : '#64748b';
+            const label = b.step === 'composing' ? 'Composer 生成' :
+                          b.step === 'llm_input' ? 'LLM 输入' :
+                          b.step === 'llm_output' ? 'LLM 输出' :
+                          b.step === 'sufficiency_check' ? '充分性检查' :
+                          b.step === 'sufficiency_result' ? '检查结果' :
+                          b.step === 'sufficiency_failed' ? '检查未通过' :
+                          b.step === 'hard_check_failed' ? '硬校验未通过' :
+                          b.step === 'done' ? '规划完成' : b.step;
+            html += '<div style="border:1px solid ' + color + ';border-radius:6px;margin-bottom:6px;overflow:hidden">';
+            html += '<div style="padding:6px 10px;background:#0d1626;cursor:pointer;color:' + color + ';font-size:13px;font-weight:bold" onclick="var body=this.parentElement.querySelector(\'.pb-body\');body.style.display=body.style.display===\'none\'?\'block\':\'none\'">' + escapeHtml(label) + '</div>';
+            if (b.content) {
+              html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;white-space:pre-wrap;word-break:break-word;color:#dbeafe;max-height:400px;overflow:auto;background:#050b17">' + escapeHtml(b.content) + '</div>';
+            } else if (b.message) {
+              html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;color:#dbeafe">' + escapeHtml(b.message) + '</div>';
+            } else {
+              html += '<div class="pb-body" style="display:none;padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;color:#64748b">(无内容)</div>';
+            }
+            html += '</div>';
+          }
+          html += '</div>';
+        }
+        el.innerHTML = html;
+      }
     }
   });  // 全流程步骤事件 → liveFeed
   source.addEventListener('node_selected', (event) => {
