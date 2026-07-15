@@ -55,9 +55,11 @@ To switch to OpenAI-compatible API, replace HttpLlmClient in llm.ts.
 - POST /projects — create project
 - GET /projects — list all
 - GET /projects/:id — get state
+- DELETE /projects/:id — delete project
 - POST /projects/:id/clarify-batch — generate clarification questions
 - POST /projects/:id/clarify-answer — submit clarification answers
 - POST /projects/:id/plan — compose graph workflow (SSE progress)
+- GET /projects/:id/workflow — get current plan_review workflow spec
 - PUT /projects/:id/workflow — edit plan_review workflow spec
 - POST /projects/:id/approve — approve a gate
 - POST /projects/:id/reject — reject a gate (bounce)
@@ -66,6 +68,9 @@ To switch to OpenAI-compatible API, replace HttpLlmClient in llm.ts.
 - POST /projects/:id/rerun-from — reset and rerun from a phase
 - GET /projects/:id/timeline — rebuild timeline from events.log
 - GET /projects/:id/runs/:run — get claim, verdict, and stream log
+- GET /projects/:id/runs/:run/stream — get run stream log only
+- GET /projects/:id/deliverables — list markdown deliverables
+- GET /projects/:id/deliverables/export — export deliverables as one markdown file
 - GET /projects/:id/events — SSE event stream
 
 ## Design Source Of Truth
