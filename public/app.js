@@ -541,10 +541,13 @@ function updateBlockFromSSE(eventType, payload) {
     const nodeId = payload.node || '';
     const desc = workflowSpec?.capabilities?.find(c => c.id === nodeId)?.desc || nodeId;
     const runId = payload.runId || '';
-    // 如果是同一节点重试,更新现有 block;否则新建
+    // 如果是同一节点同一 run 已存在(timeline 重建 + SSE 实时冲突),不重复创建
+    const dup = timelineBlocks.find(b => b.nodeId === nodeId && b.runId === runId);
+    if (dup) return; // 已存在,跳过
+    // 如果是同一节点重试(不同 runId),之前的变 failed
     const existing = timelineBlocks.find(b => b.nodeId === nodeId && b.status === 'running');
     if (existing) {
-      existing.status = 'failed'; // 之前的变 failed
+      existing.status = 'failed';
     }
     timelineBlocks.push({ nodeId, desc, runId, status: 'running', reason: payload.reason || '', llmOutput: '', _expanded: false });
   } else if (eventType === 'llm_stream') {
