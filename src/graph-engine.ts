@@ -15,7 +15,6 @@ import { checkHardGuardrails, checkSoftGuardrails, shouldHumanCheckpoint, type G
 import { runScheduler, reviewCapabilityGap, type SchedulerDecision } from "./scheduler.js";
 import type { ExecutorAdapter } from "./executors.js";
 import { diagnoseFailure, type DiagnosisResult } from "./diagnostician.js";
-import { regularizeClaim } from "./regularize.js";
 
 // 测试注入:设了就用 fake executor,不调 hermes CLI
 let injectedExecutor: ExecutorAdapter | null = null;

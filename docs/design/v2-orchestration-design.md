@@ -66,7 +66,7 @@
 
 每个角色只做一件事,数据单向流经闭环:
 - **executor**:只干活,产出 claim。不自评、不归因。
-- **规整层**(轻 LLM):claim → deliverable,只清对话外壳/提取纯净产出,不改实质内容。
+- **规整层**(轻 LLM):设计上用于 claim → deliverable 的轻清洗;当前主路径的 Hermes 产出已可直接作为 deliverable,规整层保留为后续可接回的清洗层。
 - **verifier**:只判对错。判 deliverable(非 claim),输出 verdict{passed, reasons}。
   不归因、不决定下一步。claim 保留供归因用。
 - **diagnostician**(归因者,全新角色):只归因。拿 verdict fail + claim + deliverable +
@@ -122,8 +122,8 @@ buildProgressTruth(带 verdict 的轨迹摘要)
   → scheduler 决策下一节点(吃 verdict 事实,不吃 claim)
   → 指令组装(desc + checks含硬约束 + 软引导 + blackboard/inputs + 失败反馈)
   → executor 执行 → claim
-  → 规整层 → deliverable
-  → verifier 判对错 → verdict
+  → deliverable 落盘(当前主路径直接采用 claim;必要时可接回规整层)
+  → verifier 判 deliverable 对错 → verdict
   → pass: blackboard 更新 → 下一轮
   → fail: diagnostician 归因 → 根因写进度真相 → scheduler 路由到对症修复 → 闭环
 ```
@@ -733,7 +733,7 @@ verifier 主力 command/tests + anti-cheat、workdir git 隔离 + 每节点 diff
 - [x] 人审 failure 场景展示原因+最近产出+重试 —— 已实现
 - [x] diagnostician 归因环节(五类根因)—— 已实现
 - [x] 指令组装五要素(desc+checks+软引导+上下文+失败反馈)—— 已实现
-- [x] 规整层(claim→deliverable,轻 LLM 清洗)—— 已实现
+- [x] deliverable 落盘与 verifier 判 deliverable —— 已实现;轻 LLM 规整层暂不在主路径调用,避免过度清洗丢内容
 - [x] scheduler 路由(五类根因→修复动作,高频自动/低频人审)—— 已实现
 - [x] verifier 判 deliverable(非 claim),轻节点不一致也走归因 —— 已实现
 
