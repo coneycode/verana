@@ -122,7 +122,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
     // 调度大脑决策 — 吃 verdict 事实,不吃 claim
     const decision = await runScheduler(client, spec, wf.blackboard, progressTruth, wf.iteration);
     await appendEvent(solutionDir, { type: "scheduler_decision", reason: decision.reason, data: { next_node: decision.next_node, is_complete: decision.is_complete, capability_gap: decision.capability_gap, action: decision.action } });
-    bus?.publish(projectEvent("node_selected", projectId, { node: decision.next_node, reason: decision.reason }));
+    bus?.publish(projectEvent("scheduler_decision", projectId, { node: decision.next_node, reason: decision.reason, action: decision.action }));
 
     // 完成判断
     if (decision.is_complete) {
@@ -204,7 +204,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
     const runId = await nextRunId(rootDir, projectId);
     wf.runs[node.id] = [...(wf.runs[node.id] ?? []), runId];
     await appendEvent(solutionDir, { type: "run_created", node: node.id, run_id: runId });
-    bus?.publish(projectEvent("node_selected", projectId, { node: node.id, runId, status: "running" }));
+    bus?.publish(projectEvent("node_selected", projectId, { node: node.id, runId, reason: decision.reason, status: "running" }));
 
     const execResult = await executeNode(rootDir, projectId, runId, node, spec, wf.blackboard, client, bus);
     const runResult = execResult.content;
