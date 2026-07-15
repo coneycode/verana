@@ -10,6 +10,7 @@ import { HttpLlmClient, loadConfig, setLlmStatusCallback, type LlmClient } from 
 import { approveGate, deleteProject, getProject, listProjects, projectPath, rejectGate, saveProjectState } from "./project-store.js";
 import { composeGraphWorkflow, planGraphWorkflow } from "./pipeline.js";
 import { runGraphProject, applyHumanVerdict } from "./graph-engine.js";
+import { readEvents } from "./event-log.js";
 import { validateGraphWorkflow } from "./workflow-validator.js";
 import { renderHomePage } from "./web.js";
 import type { GraphWorkflowSpec } from "./types.js";
@@ -226,6 +227,13 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     await writeFile(wfPath, JSON.stringify(spec, null, 2), "utf8");
     bus.publish(projectEvent("workflow_edited", request.params.id, { reason: "人审编辑 spec" }));
     return { ok: true };
+  });
+
+  // 返回 timeline 数据(从 events.log 提取,供前端刷新后重建)
+  app.get<{ Params: { id: string } }>("/projects/:id/timeline", async (request) => {
+    const solDir = join(projectPath(options.rootDir, request.params.id), "solution");
+    const events = await readEvents(solDir);
+    return events;
   });
 
   app.get<{ Params: { id: string } }>("/projects/:id/deliverables", async (request) => {

@@ -147,6 +147,13 @@ async function refresh() {
   if (phase && !['created','clarifying','composing'].includes(phase) && !workflowSpec) {
     try { workflowSpec = await api('/projects/'+selectedId+'/workflow'); } catch(e) { workflowSpec = null; }
   }
+  // 执行阶段:如果 timelineBlocks 空,从后端 events.log 重建(刷新后恢复历史)
+  if (phase === 'executing' && timelineBlocks.length === 0) {
+    try {
+      const events = await api('/projects/'+selectedId+'/timeline');
+      rebuildTimelineFromEvents(events);
+    } catch(e) {}
+  }
   render();
   await loadProjects();
 }
@@ -492,6 +499,35 @@ function toggleBlock(i) {
     timelineBlocks[i]._expanded = !timelineBlocks[i]._expanded;
     renderTimelineBlocks('timelineBox');
   }
+}
+
+/** 从后端 events.log 重建 timelineBlocks(刷新后恢复历史) */
+function rebuildTimelineFromEvents(events) {
+  timelineBlocks = [];
+  for (const e of events) {
+    if (e.type === 'node_selected' || (e.type === 'run_created' && e.node)) {
+      // node_selected 事件:创建/更新 block
+      const nodeId = e.node || '';
+      const desc = workflowSpec?.capabilities?.find(c => c.id === nodeId)?.desc || nodeId;
+      const runId = e.run_id || '';
+      const existing = timelineBlocks.find(b => b.nodeId === nodeId && b.status === 'running');
+      if (existing) { existing.status = 'failed'; }
+      timelineBlocks.push({ nodeId, desc, runId, status: 'running', reason: e.reason || '', llmOutput: '', _expanded: false });
+    } else if (e.type === 'verdict') {
+      const running = [...timelineBlocks].reverse().find(b => b.status === 'running');
+      if (running) {
+        running.verdict = e.data;
+        running.status = e.data?.passed ? 'passed' : 'failed';
+      }
+    } else if (e.type === 'diagnosis') {
+      const lastFailed = [...timelineBlocks].reverse().find(b => b.status === 'failed');
+      if (lastFailed) lastFailed.diagnosis = e.data;
+    } else if (e.type === 'human_required') {
+      const running = timelineBlocks.find(b => b.status === 'running');
+      if (running) running.status = 'failed';
+    }
+  }
+  // 最后一个 running 的可能是当前正在执行的
 }
 
 /** SSE 事件 → 更新 timelineBlocks */
