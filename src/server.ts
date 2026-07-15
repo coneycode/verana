@@ -7,7 +7,7 @@ import { parse } from "yaml";
 import { generateClarifyBatch, reviewClarifications, buildGoalSummary, type ClarificationEntry } from "./clarifier.js";
 import { EventBus, projectEvent } from "./events.js";
 import { HttpLlmClient, loadConfig, setLlmStatusCallback, type LlmClient } from "./llm.js";
-import { approveGate, deleteProject, getProject, listProjects, projectPath, rejectGate, saveProjectState } from "./project-store.js";
+import { approveGate, deleteProject, getProject, listProjects, projectPath, rejectGate, saveProjectState, writeYaml } from "./project-store.js";
 import { composeGraphWorkflow, planGraphWorkflow } from "./pipeline.js";
 import { runGraphProject, applyHumanVerdict } from "./graph-engine.js";
 import { readEvents } from "./event-log.js";
@@ -230,7 +230,7 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     // 硬校验编辑后的 spec
     const validation = validateGraphWorkflow(spec);
     if (!validation.passed) throw new Error(`Edited workflow failed validation: ${validation.errors.join("; ")}`);
-    await writeFile(wfPath, JSON.stringify(spec, null, 2), "utf8");
+    await writeYaml(wfPath, spec);
     bus.publish(projectEvent("workflow_edited", request.params.id, { reason: "人审编辑 spec" }));
     return { ok: true };
   });
