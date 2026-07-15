@@ -355,13 +355,10 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
   // claim 留痕(原始产出,带对话外壳,供归因用)
   await writeFile(join(runDir, "claim.md"), `# Claim\n\nNode ${node.id} (${node.kind}).\n\n${content}`, "utf8");
 
-  // 规整层:claim → deliverable(去对话外壳,轻 LLM 清洗,不改实质)
-  let deliverable = content;
-  if (node.kind === "agent" && content.length > 0) {
-    bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "regularizing", message: "规整产出(去对话外壳)..." }));
-    deliverable = await regularizeClaim(client, content, node.desc);
-    await appendFile(streamPath, `\n## 规整后产出(deliverable)\n\n${deliverable}\n`, "utf8");
-  }
+  // claim 已经是 hermes 最终输出(╭─ ⚕ Hermes ─ 块),本身就是干净的
+  // 不需要 regularize 清洗 — regularize 会过度清洗丢内容
+  // 直接用 claim 当 deliverable
+  const deliverable = content;
 
   // deliverable 写到固定路径(供 verifier 读,即使没有 outputs)
   await writeFile(join(runDir, "deliverable.md"), deliverable, "utf8");
