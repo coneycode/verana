@@ -2,9 +2,9 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parse } from "yaml";
 
-import { generateClarifyBatch, reviewClarifications, buildGoalSummary } from "./clarifier.js";
 import { HttpLlmClient, loadConfig, type LlmClient } from "./llm.js";
-import { approveGate, createProject, getProject, listProjects, projectPath, rejectGate, saveProjectState } from "./project-store.js";
+import { planGraphWorkflow } from "./pipeline.js";
+import { approveGate, createProject, getProject, listProjects, projectPath, rejectGate } from "./project-store.js";
 
 export type Output = (line: string) => void;
 
@@ -43,6 +43,12 @@ export async function runCli(argv: string[], output: Output = console.log, clien
     if (!gateId) throw new Error("Usage: verana reject <project-id> <gate-id>");
     await rejectGate(root, projectId, gateId, optionValue(argv, "--note") ?? "rejected");
     output(`rejected ${gateId}`);
+    return;
+  }
+
+  if (command === "plan") {
+    await planGraphWorkflow(root, projectId, llm);
+    output("planned solution workflow");
     return;
   }
 
@@ -105,7 +111,7 @@ export async function runCli(argv: string[], output: Output = console.log, clien
   output(USAGE);
 }
 
-const USAGE = `verana new|list|clarify|status|approve|reject|run|logs|input|cancel`;
+const USAGE = `verana new|list|clarify|plan|status|approve|reject|run|logs|input|cancel`;
 
 function parseArgs(argv: string[]): { command: string; args: string[]; root: string } {
   const rootIdx = argv.indexOf("--root");
