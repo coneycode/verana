@@ -24,6 +24,7 @@ const SCHEDULER_SYSTEM = `你是一个调度大脑(scheduler)。你是调度决�
   - C_context_error(上下文错):action="retry_with_feedback"(blackboard 已修正,重跑)
   - D_standard_unreasonable(标准不合理):action="human"(验收标准要改,属重大决策)
   - E_goal_problem(目标/规划问题):action="human"(回澄清或重规划,属重大决策)
+  - F_artifact_contract_failure(产物契约失败):优先 action="human";只有明显是产物太短/像自述且仍有重试余量时,才允许 action="retry_with_feedback"
 - 同一节点归因-修复循环超过2次还失败:action="human"
 - 如果清单里没有合适的能力:action="request_capability",capability_gap 描述需求
 - reason 必须具体,说明基于进度真相里的哪些事实(含根因)做的判断

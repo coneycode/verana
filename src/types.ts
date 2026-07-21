@@ -23,6 +23,27 @@ export type WorkflowStatus =
 
 export type CheckMethod = "command" | "file_exists" | "llm_rubric" | "manual";
 export type NodeKind = "light" | "agent";
+export type DeliverableType = "research" | "creative" | "implementation";
+export type ArtifactKind = "file" | "directory";
+export type ArtifactFormat = "markdown" | "json" | "yaml" | "text" | "directory";
+export type ArtifactLookalike = "claim" | "stream" | "process_log" | "metadata_only";
+
+export interface OutputContract {
+  path: string;
+  desc: string;
+  kind?: ArtifactKind;
+  required?: boolean;
+  min_bytes?: number;
+  min_lines?: number;
+  format?: ArtifactFormat;
+  must_not_look_like?: ArtifactLookalike[];
+}
+
+export interface DeliverableContract {
+  required_sections: string[];
+  forbidden_patterns: string[];
+  notes?: string[];
+}
 
 /** 轻节点:单次调用;重节点:自主 agent。同一个节点可被多次执行(多轮) */
 export interface CapabilityNode {
@@ -32,7 +53,7 @@ export interface CapabilityNode {
   agent?: string;           // 重节点:agent 名;轻节点:可选(给 evaluator 看的角色)
   skills?: string[];
   inputs?: Array<{ path?: string; ref?: string; desc: string }>;
-  outputs?: Array<{ path: string; desc: string }>;
+  outputs?: OutputContract[];
   checks: Array<{ method: CheckMethod; target?: string; desc: string }>;
   /** 这个节点负责更新 blackboard 的哪些字段(更新记忆节点用) */
   updates?: string[];
@@ -71,7 +92,7 @@ export interface GraphWorkflowSpec {
   goal: {
     raw: string;
     clarified: string;
-    deliverable_type: "research" | "creative" | "implementation";
+    deliverable_type: DeliverableType;
     iterative: boolean;
     acceptance: string[];
   };
@@ -88,6 +109,7 @@ export interface GraphWorkflowSpec {
   completion_criteria: string[];  // 完成标准(语义,调度判断)
   hard_constraints: string[];     // 客观硬约束(进 checks + 进指令,双向锁)
   soft_guidance: string[];         // 主观软引导(只进指令,保留 agent 自由度)
+  deliverable_contract?: DeliverableContract;
   policies: {
     long_running: { idle_watchdog: string; max_wall: string };
     on_failure: string;
@@ -102,6 +124,7 @@ export interface EventEntry {
     | "node_selected" | "node_start" | "node_done" | "verdict"
     | "blackboard_updated" | "guardrail_hit" | "human_required"
     | "scheduler_decision" | "capability_added" | "run_created"
+    | "artifact_collected" | "artifact_validated" | "artifact_failed"
     | "llm_stream" | "diagnosis";
   node?: string;
   run_id?: string;
@@ -137,9 +160,12 @@ export interface GraphRuntime {
 
 export interface VerdictRecord {
   passed: boolean;
-  method: CheckMethod | "combined" | "cross_check";
+  method: CheckMethod | "combined" | "cross_check" | "artifact_contract";
   reasons: string[];
   evidence: string[];
+  artifact_report?: string;
+  artifact_paths?: string[];
+  failure_class?: "F_artifact_contract_failure";
   cross_check_agree?: boolean;  // 轻节点交叉验证是否一致
 }
 

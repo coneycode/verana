@@ -15,6 +15,7 @@ import { checkHardGuardrails, checkSoftGuardrails, shouldHumanCheckpoint, type G
 import { runScheduler, reviewCapabilityGap, type SchedulerDecision } from "./scheduler.js";
 import type { ExecutorAdapter } from "./executors.js";
 import { diagnoseFailure, type DiagnosisResult } from "./diagnostician.js";
+import { artifactFailureVerdict, collectArtifacts, getEffectiveDeliverableContract, renderArtifactForVerifier, renderDeliverableContract, validateArtifactContract } from "./artifacts.js";
 
 // 测试注入:设了就用 fake executor,不调 hermes CLI
 let injectedExecutor: ExecutorAdapter | null = null;
@@ -211,12 +212,31 @@ export async function runGraphProject(rootDir: string, projectId: string, client
 
     // 验证
     let verdict: VerdictRecord;
+    let artifactBody = runResult;
     if (node.kind === "light") {
       verdict = await crossCheckLight(rootDir, projectId, runId, node, spec, wf.blackboard, client, bus, runResult);
     } else {
-      verdict = await verifyAgentNode(rootDir, projectId, runId, node, spec, client, bus);
+      const runDir = join(dir, "runs", runId);
+      const snapshot = await collectArtifacts({ projectDir: dir, runDir, runId, node });
+      await appendEvent(solutionDir, { type: "artifact_collected", node: node.id, run_id: runId, data: { snapshot_dir: join("runs", runId, "artifacts"), outputs: snapshot.entries.map(e => e.declared_path) } });
+      const report = await validateArtifactContract({
+        snapshot,
+        node,
+        projectDir: dir,
+        deliverableType: spec.goal.deliverable_type,
+        deliverableContract: spec.deliverable_contract,
+      });
+      await writeYaml(join(runDir, "artifact-report.yaml"), report);
+      await appendEvent(solutionDir, { type: report.passed ? "artifact_validated" : "artifact_failed", node: node.id, run_id: runId, data: { passed: report.passed, report: join("runs", runId, "artifact-report.yaml"), failure_codes: report.outputs.flatMap(o => o.failures.map(f => f.code)) } });
+      if (!report.passed) {
+        verdict = artifactFailureVerdict(report);
+      } else {
+        artifactBody = await renderArtifactForVerifier(snapshot);
+        verdict = await verifyAgentNode(rootDir, projectId, runId, node, spec, client, bus, artifactBody, snapshot.entries.map(e => e.snapshot_path));
+      }
     }
-    await appendEvent(solutionDir, { type: "verdict", node: node.id, run_id: runId, reason: `passed=${verdict.passed} ${verdict.reasons.join("; ")}`, data: { passed: verdict.passed, cross_check_agree: verdict.cross_check_agree } });
+    await writeYaml(join(dir, "runs", runId, "verdict.yaml"), verdict);
+    await appendEvent(solutionDir, { type: "verdict", node: node.id, run_id: runId, reason: `passed=${verdict.passed} ${verdict.reasons.join("; ")}`, data: { passed: verdict.passed, cross_check_agree: verdict.cross_check_agree, failure_class: verdict.failure_class } });
     bus?.publish(projectEvent("verdict", projectId, { node: node.id, runId, verdict }));
 
     if (!verdict.passed) {
@@ -226,7 +246,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
 
       // 归因:判断根因(每次 fail 都归因,不盲目重试)
       const diagnosis = await diagnoseFailure(client, {
-        node, verdict, claim: runResult, deliverable: runResult, instruction,
+        node, verdict, claim: runResult, artifact: artifactBody, instruction,
         blackboard: wf.blackboard, spec, failCount: retries,
         previousDiagnoses: await getNodeDiagnoses(solutionDir, node.id),
       });
@@ -286,7 +306,14 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
 
   // 验收标准明示给 executor(执行/验收信息对称)— 含 target 和 outputs 路径
   const checksList = (node.checks ?? []).map(c => `- [${c.method}] ${c.desc}${c.target ? ` (目标: ${c.target})` : ""}`).join("\n");
-  const outputsList = (node.outputs ?? []).map(o => `- ${o.path}: ${o.desc ?? ""}`).join("\n");
+  const outputsList = (node.outputs ?? []).flatMap((o) => {
+    const line = `- ${o.path}: ${o.desc ?? ""}`;
+    const alt = o.path.endsWith("/") ? `- ${o.path}content.md: ${o.desc ?? ""}` : null;
+    return alt ? [line, alt] : [line];
+  }).join("\n");
+
+  const deliverableContract = getEffectiveDeliverableContract(spec.goal.deliverable_type, spec.deliverable_contract);
+  const deliverableContractText = renderDeliverableContract(deliverableContract);
 
   // 软引导(主观方向,不强制)
   const softGuidance = spec.soft_guidance ?? [];
@@ -307,6 +334,9 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     checksList ? `验收标准(必须满足,你会被按这些标准验证):\\n${checksList}` : "",
     "",
     outputsList ? `产出文件路径(必须写到这些路径):\\n${outputsList}` : "",
+    "",
+    node.kind === "agent" ? deliverableContractText : "",
+    node.kind === "agent" ? "必须把正式交付物正文写入声明 output 路径；不要把执行过程、工具日志、claim、完成自述写进交付物。" : "",
     "",
     softGuidance.length > 0 ? `方向引导(主观偏好,尽量遵循但不强制):\\n${softGuidance.map(s => `- ${s}`).join("\\n")}` : "",
     "",
@@ -354,27 +384,7 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
   // claim 留痕(原始产出,带对话外壳,供归因用)
   await writeFile(join(runDir, "claim.md"), `# Claim\n\nNode ${node.id} (${node.kind}).\n\n${content}`, "utf8");
 
-  // claim 已经是 hermes 最终输出(╭─ ⚕ Hermes ─ 块),本身就是干净的
-  // 不需要 regularize 清洗 — regularize 会过度清洗丢内容
-  // 直接用 claim 当 deliverable
-  const deliverable = content;
-
-  // deliverable 写到固定路径(供 verifier 读,即使没有 outputs)
-  await writeFile(join(runDir, "deliverable.md"), deliverable, "utf8");
-
-  // 落盘用 deliverable(纯净产出)
-  for (const output of node.outputs ?? []) {
-    const outPath = join(dir, output.path);
-    if (output.path.endsWith("/")) {
-      await mkdir(outPath, { recursive: true });
-      await writeFile(join(outPath, "content.md"), deliverable, "utf8");
-    } else {
-      await mkdir(join(outPath, ".."), { recursive: true });
-      await writeFile(outPath, deliverable, "utf8");
-    }
-  }
-
-  return { content: deliverable, instruction: promptParts.join("\n") };
+  return { content, instruction: promptParts.join("\n") };
 }
 
 /** 轻节点交叉验证:生成模型出结果 → evaluator 独立判一次 → 不一致(fail)走归因 */
@@ -418,33 +428,14 @@ async function crossCheckLight(rootDir: string, projectId: string, runId: string
   };
 }
 
-/** 重节点:claim/verdict 独立验证 */
-async function verifyAgentNode(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, client: LlmClient, bus?: EventBus): Promise<VerdictRecord> {
+/** 重节点:artifact/verdict 独立验证 */
+async function verifyAgentNode(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, client: LlmClient, bus: EventBus | undefined, artifactBody: string, artifactPaths: string[]): Promise<VerdictRecord> {
   const dir = projectPath(rootDir, projectId);
   const runDir = join(dir, "runs", runId);
   const streamPath = join(runDir, "stream.md");
 
-  const outputContents: string[] = [];
-  // 优先从 node.outputs 读(规整后的 deliverable 落盘)
-  for (const output of node.outputs ?? []) {
-    const targetPath = output.path.endsWith("/") ? join(output.path, "content.md") : output.path;
-    try {
-      outputContents.push(`\n--- ${output.path} ---\n${await readFile(join(dir, targetPath), "utf8")}`);
-    } catch {
-      outputContents.push(`\n--- ${output.path} ---\n(文件不存在)`);
-    }
-  }
-  // 兜底:如果没有 outputs 或 outputs 读不到,从 deliverable.md 读(规整后的纯净产出)
-  if (outputContents.length === 0 || outputContents.every(c => c.includes("(文件不存在)"))) {
-    try {
-      const deliverable = await readFile(join(runDir, "deliverable.md"), "utf8");
-      outputContents.push(`\n--- deliverable ---\n${deliverable}`);
-    } catch {
-      outputContents.push("\n--- deliverable ---\n(文件不存在)");
-    }
-  }
-
   const checkDescs = node.checks.map(c => `- [${c.method}] ${c.desc}${c.target ? ` (target: ${c.target})` : ""}`).join("\n");
+  const deliverableContractText = renderDeliverableContract(getEffectiveDeliverableContract(spec.goal.deliverable_type, spec.deliverable_contract));
   const userPrompt = [
     `节点: ${node.id}`,
     `描述: ${node.desc}`,
@@ -452,10 +443,12 @@ async function verifyAgentNode(rootDir: string, projectId: string, runId: string
     "验收标准:",
     checkDescs,
     "",
-    "交付物:",
-    outputContents.join("\n"),
+    deliverableContractText,
     "",
-    "请独立判断是否满足验收标准。",
+    "交付物 Artifact Snapshot:",
+    artifactBody,
+    "",
+    "请独立判断 artifact snapshot 是否满足验收标准和交付物结构要求。不要把 claim、执行过程日志、过程自述当成交付物。缺少必需章节或出现禁止模式必须判失败。",
   ].join("\n");
 
   bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "verifying", message: "验证模型判定中..." }));
@@ -467,6 +460,8 @@ async function verifyAgentNode(rootDir: string, projectId: string, runId: string
     method: "combined",
     reasons: result.reasons ?? [],
     evidence: result.evidence ?? [],
+    artifact_report: `runs/${runId}/artifact-report.yaml`,
+    artifact_paths: artifactPaths,
   };
 }
 

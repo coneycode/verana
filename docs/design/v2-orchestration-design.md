@@ -6,6 +6,8 @@
 本文记录已锁定的设计决策。每节标注:
 [LOCKED] 已确认 · [DEFERRED] 推迟 · [PARTIAL] 部分实现 · [OUTLINE] 仅预留接口
 
+运行时内核 / Artifact Contract 的可落地规格另见 `docs/design/v2-runtime-kernel-spec.md`。本文保留架构总纲,具体数据模型、函数契约、机械校验和测试清单以该规格文档为准。
+
 > 版本演进见 git log(每条设计决策一个 commit)。
 > 本版是对 v0.1-v0.3 静态 DAG 执行模型的重构。原线性 DAG 是新图模型的退化特例。
 > 复用的旧设计:目录结构、Executor 适配、Clarifier 骨架、Verifier claim/verdict、
@@ -65,11 +67,12 @@
 ### 0.5.3 单一职责 + scheduler 唯一决策(铁律)
 
 每个角色只做一件事,数据单向流经闭环:
-- **executor**:只干活,产出 claim。不自评、不归因。
-- **规整层**(轻 LLM):设计上用于 claim → deliverable 的轻清洗;当前主路径的 Hermes 产出已可直接作为 deliverable,规整层保留为后续可接回的清洗层。
-- **verifier**:只判对错。判 deliverable(非 claim),输出 verdict{passed, reasons}。
+- **executor**:只干活,产出 claim 与声明输出的磁盘产物。claim 只是证词,不是交付物。
+- **artifact_collector**(运行时内核职责):收集节点声明的 outputs,冻结 artifact snapshot,做机械契约检查。它不是 LLM 角色,而是 scaffold 的事实层。
+- **规整层**(轻 LLM):设计上用于 claim → deliverable 的轻清洗;后续主路径应改成基于 artifact snapshot 的规范化,规整层保留为兼容层,不再直接把 claim 当 deliverable 真相。
+- **verifier**:只判对错。判冻结后的 artifact(非 claim),输出 verdict{passed, reasons}。
   不归因、不决定下一步。claim 保留供归因用。
-- **diagnostician**(归因者,全新角色):只归因。拿 verdict fail + claim + deliverable +
+- **diagnostician**(归因者,全新角色):只归因。拿 verdict fail + claim + artifact +
   节点定义 + 指令 + 上下文 + 历史失败,输出**单一主根因**{类型, 说明}。不决策、不修复。
 - **scheduler**:唯一决策出口。拿根因(强输入)+ 全局状态,自主决策路由,能纠正归因误判。
 - **各修复节点**:各自单一职责,被 scheduler 调度。
@@ -77,9 +80,9 @@
 规划阶段的"生成-检查-重生成"用**机械编排**(planGraphWorkflow 函数,不引入决策角色,
 不归 scheduler);执行阶段的调度才归 scheduler。
 
-### 0.5.4 五类根因 → 修复动作(分档)
+### 0.5.4 六类根因 → 修复动作(分档)
 
-diagnostician 输出五类根因之一(覆盖链路每一环,不重叠):
+diagnostician 输出六类根因之一(覆盖链路每一环,不重叠):
 
 | 根因 | 含义 | 对症修复 |
 |------|------|---------|
@@ -88,6 +91,7 @@ diagnostician 输出五类根因之一(覆盖链路每一环,不重叠):
 | C 上下文缺失/错误 | 节点对、指令对,但输入(blackboard/inputs)不对 | 修正上下文后重跑 |
 | D 验收标准不合理 | executor 没错,是 verifier 的 checks 定歪了 | 回规划修正该节点 checks |
 | E 目标/规划有问题 | 目标本身不清晰/矛盾,或规划方向错 | 回澄清 / 重大重规划 |
+| F 产物契约失败 | scaffold 收集到的 artifact 缺失、为空、像过程日志/claim、自述覆盖正文、或 verifier 读错对象 | 先停在 artifact 层修复执行/收集契约;必要时人审,不盲目归为 A 重试 |
 
 scheduler 路由动作分两档:
 - **高频自动路由**(scheduler 自主决策):具体化指令重跑(A)、修正上下文重跑(C)、
@@ -120,10 +124,11 @@ diagnostician 也是 LLM,可能判错。不额外加"归因校验"(避免套娃)
 [事后归因,执行循环每轮]
 buildProgressTruth(带 verdict 的轨迹摘要)
   → scheduler 决策下一节点(吃 verdict 事实,不吃 claim)
-  → 指令组装(desc + checks含硬约束 + 软引导 + blackboard/inputs + 失败反馈)
-  → executor 执行 → claim
-  → deliverable 落盘(当前主路径直接采用 claim;必要时可接回规整层)
-  → verifier 判 deliverable 对错 → verdict
+  → 指令组装(desc + checks含硬约束 + 软引导 + blackboard/inputs + 失败反馈 + artifact contract)
+  → executor 执行 → claim + 对工作区的文件写入
+  → artifact_collector 从 node.outputs 收集磁盘产物并冻结 snapshot
+  → artifact_validator 做机械契约检查(存在/非空/形态/非过程日志/非自述)
+  → verifier 判 artifact snapshot 语义质量 → verdict
   → pass: blackboard 更新 → 下一轮
   → fail: diagnostician 归因 → 根因写进度真相 → scheduler 路由到对症修复 → 闭环
 ```
@@ -360,6 +365,8 @@ X 能力、缺口理由、Composer 凭什么判定合理" 必须完整留痕)。
 
 产品灵魂:**agent 说"完成"只是 claim,verifier 的 verdict 才是真相**。
 
+补充铁律(2026-07-15):**agent claim 永远不是 deliverable。只有从 node.outputs 声明路径收集并冻结的 artifact snapshot 才是 verifier 的输入。** 具体落地规格见 `v2-runtime-kernel-spec.md`。
+
 ### 6.0 验证是强制自动发生的,不占调度决策 [LOCKED 2026-07-07]
 
 所有节点执行后必须验证 —— 这是强制规则里自动发生的既定流程,不是"要不要做"的选择,
@@ -368,8 +375,39 @@ X 能力、缺口理由、Composer 凭什么判定合理" 必须完整留痕)。
 验证产出的 verdict 事实进入**进度真相**(第 5.3 节),成为 scheduler 下一步决策的地基。
 scheduler 吃 verdict 事实、不吃 claim —— 这是死循环修复的根本(见 3.1)。
 
+### 6.1 Artifact Contract / 产物契约 [LOCKED 2026-07-15]
+
+Agent Workflow 最终不是 prompt 流程图,而更像一个小型操作系统。运行时内核必须先建立事实层,再让 LLM 做语义判断。Verana 对产物采用以下契约:
+
+- `stdout` / `stream.md`:执行过程日志,只供观察和调试,永远不是交付物。
+- `claim.md`:agent 对本次 run 的自述证词,UNVERIFIED,只供 diagnostician 归因参考。
+- `node.outputs`:能力节点声明的正式产物路径,是 executor 必须在工作区写出的文件/目录。
+- `artifact snapshot`:scaffold 从 `node.outputs` 读取并冻结的一份不可变快照,是 verifier 的唯一正文输入。
+- `deliverable`:通过 artifact contract 后可进入语义验收的正式交付物;不得由 claim 直接生成或覆盖。
+
+执行器契约:
+- 普通 LLM 轻节点可以返回文本,但仍要被交叉验证。
+- Hermes / Claude Code / 类 coding agent 是 workspace mutator,不是纯文本生成器。其最终回复只是 claim;正式产物必须体现在声明输出文件里。
+- engine 不得把 claim 无条件写入 `node.outputs`。若声明输出不存在或无效,应记录 artifact failure,而不是把 claim 兜底成正文。
+
+Artifact contract 是 verifier 的前置机械关卡:
+1. collect:按 `node.outputs` 读取磁盘文件/目录,写入 `runs/<run-id>/artifacts/` 冻结快照。
+2. validate:用确定性规则检查存在、非空、最小长度、必要结构、非过程日志/非完成自述。
+3. verify:只有 validate 通过后,verifier 才读取 artifact snapshot 做语义验收。
+
+本节只定义架构边界。落地时必须按 `v2-runtime-kernel-spec.md` 实现类型、函数契约、事件、机械校验和测试,不得只把这些规则写进 prompt。
+
+典型机械失败:
+- 声称已写文件,但声明输出路径不存在。
+- 文件存在但为空或极短。
+- 文件内容高比例是“我来... / 让我... / 已完成... / 文件已写入...”等过程话术。
+- 文件只是 claim、stream 摘要或元数据统计,没有正文。
+- 引擎读取了错误路径或用 claim 覆盖了声明输出。
+
+这些失败归为 `F_artifact_contract_failure`,不是普通 `A_instruction_vague`。scheduler 不应盲目 prompt 重试,而应优先修复执行/收集契约或转人审。
+
 ### 两类节点的验证
-- **重节点**:claim/verdict 独立验证(下方机制)
+- **重节点**:artifact contract → artifact/verdict 独立验证(下方机制)
 - **轻节点**:判断过 evaluator 交叉验证(第 2.2 节),不一致转人审
 
 ### 验证方法(节点 checks 每条的 method)
@@ -384,17 +422,19 @@ scheduler 吃 verdict 事实、不吃 claim —— 这是死循环修复的根�
 - llm_rubric 用独立 evaluator 模型;verdict 必附"判定理由 + 引用证据",可复核
 - 一个节点 checks 支持多方法组合,全过才算过
 
-### claim vs verdict(反黑盒核心)
+### artifact vs claim vs verdict(反黑盒核心)
+- `runs/<run-id>/stream.md` — executor stdout/过程日志,OBSERVATION ONLY
 - `runs/<run-id>/claim.md` — agent 自报(原话,UNVERIFIED)
+- `runs/<run-id>/artifacts/` — 从声明 outputs 冻结的 artifact snapshot,VERIFIER INPUT
 - `runs/<run-id>/verdict.yaml` — verifier 独立判定(pass/fail + 理由 + 证据,真相)
-- UI 并排展示两者,显式暴露差距
+- UI 并排展示 claim / artifact / verdict,显式暴露"自述"与"物证"差距
 
 ### FAIL 后归因路由(有上限,会升级)
 - FAIL → 每次先由 diagnostician 判单一主根因,不做盲目重试
 - 根因与 verdict 差距说明写进事件日志;下一轮 scheduler 读取进度真相与根因,选择重跑、换节点、补能力或转人审
-- `A_instruction_vague` / `C_context_error` 通常重跑同节点,指令携带失败反馈;`B_capability_gap` 触发 Composer 复核并可动态新增能力;`D_standard_unreasonable` / `E_goal_problem` 转人审
+- `A_instruction_vague` / `C_context_error` 通常重跑同节点,指令携带失败反馈;`B_capability_gap` 触发 Composer 复核并可动态新增能力;`D_standard_unreasonable` / `E_goal_problem` 转人审;`F_artifact_contract_failure` 先修复产物契约/执行收集路径,不盲目 prompt 重试
 - 重跑上限由 `guardrails.hard.max_retries_per_node` 控制(默认 3);超限仍 FAIL → 升级人工
-- 每次执行都是新 run,claim / deliverable / verdict / diagnosis 都留痕可见
+- 每次执行都是新 run,stream / claim / artifact snapshot / verdict / diagnosis 都留痕可见
 
 ---
 
@@ -519,11 +559,16 @@ clarifying → goal_confirm → composing → plan_review → executing → fina
 
 ### 10.3 Node / Run
 ```
-selected(调度选中) → running → verifying → done
-                                    ↘ failed(重跑耗尽)→ 升级人审
+selected(调度选中) → running → artifact_collected → artifact_validated → verifying → done
+                                    ↘ artifact_failed / failed(重跑耗尽) → 升级人审
 ```
 轻节点:running → 交叉验证 → done / 不一致转人审
-重节点:running → verdict → done / failed
+重节点:running → artifact contract → verdict → done / failed
+
+关键不变量:
+- 未产生 artifact snapshot 的重节点不能进入 verifying。
+- artifact_validated 失败时不得把 claim 兜底成 deliverable。
+- verdict 事件必须引用本次 run 的 artifact snapshot;否则该 verdict 非法。
 
 ---
 
@@ -545,11 +590,21 @@ loop:
     is_complete=true → workflow → final_review; break
     execute/retry/switch → node = decision.next_node
   check_soft_guardrails(独立模型,node)          # 执行前软护栏 → 停,转人审
-  run = execute(node, blackboard)              # 跑节点,产出 claim + deliverable
-  verdict = verify(run.deliverable)            # 重节点独立验证 / 轻节点交叉验证
+  run = execute(node, blackboard)              # 跑节点,产出 claim + 工作区文件变更
+  artifact = collect_artifacts(node.outputs)   # 从声明输出收集磁盘产物,冻结 snapshot
+  append_event(artifact_collected)
+  contract = validate_artifact_contract(artifact)
+  append_event(artifact_validated)
+  if contract fail:
+    verdict = artifact_failure_verdict(contract)
+    diagnosis = diagnostician(verdict, claim, artifact, instruction, blackboard) # F 类优先
+    append_event(verdict); append_event(diagnosis)
+    if retries_exhausted or scaffold_bug: 停,转人审
+    continue
+  verdict = verify(artifact.snapshot)          # 重节点独立验证 / 轻节点交叉验证
   append_event(verdict)
   if verdict fail:
-    diagnosis = diagnostician(verdict, claim, deliverable, instruction, blackboard)
+    diagnosis = diagnostician(verdict, claim, artifact, instruction, blackboard)
     append_event(diagnosis)
     if retries_exhausted: 停,转人审
     continue                                  # 下一轮由 scheduler 按根因路由
@@ -575,16 +630,17 @@ loop:
 │   │   ├── blackboard.yaml     # 跨轮记忆当前值(快照的一部分)[更新节点维护]
 │   │   ├── events.log          # append-only 事件日志(轨迹+留痕+恢复)
 │   │   ├── snapshots/          # 状态快照(每节点完成一份)
-│   │   ├── solution.md         # 交付物 [agent 产出,人审]
-│   │   └── ...                 # 其他产物(章节、research 等,由能力节点产出)
+│   │   ├── solution.md         # 交付物 [由声明 outputs 产出,人审]
+│   │   └── ...                 # 其他产物(章节、research 等,由能力节点写入声明 outputs)
 │   ├── implementation/         # 实现阶段 [方案闭环后创建]
 │   ├── agents/ skills/ scripts/  # 项目私有资源 [Composer],两阶段共享
 │   └── runs/<run-id>/          # 扁平,meta.yaml 标 phase/node
 │       ├── meta.yaml
+│       ├── stream.md           # executor stdout/过程日志(observation only)
 │       ├── claim.md            # agent 自报(unverified)
-│       ├── verdict.yaml        # verifier 独立判定(真相)
-│       ├── log.md
-│       └── artifacts/
+│       ├── artifacts/          # 从 node.outputs 冻结的 artifact snapshot(verifier input)
+│       ├── artifact-report.yaml # 机械契约检查结果(存在/非空/形态/失败原因)
+│       └── verdict.yaml        # verifier 独立判定(真相,引用 artifact snapshot)
 └── shared/                     # 跨项目公共组件库(框架无关)
     ├── agents/ skills/ scripts/
 ```
@@ -694,7 +750,9 @@ verifier 主力 command/tests + anti-cheat、workdir git 隔离 + 每节点 diff
 
 ## 附录 A:设计项状态总览
 
-实现同步(2026-07-15):动态调度闭环已落地到 `src/graph-engine.ts` / `src/scheduler.ts` / `src/diagnostician.ts` / `src/event-log.ts` / `src/pipeline.ts` / `src/server.ts`。近期实现重点是控制面打磨:plan_progress 展示规划期 LLM 输入输出、events.log 重建 timeline、plan_review rerun 清理 workflow/runs/events 并重触发 plan、claim 直接作为 deliverable 避免 regularize 过度清洗、scheduler_decision 与 node_selected 分离以避免 UI 重复失败。
+实现同步(2026-07-15):动态调度闭环已落地到 `src/graph-engine.ts` / `src/scheduler.ts` / `src/diagnostician.ts` / `src/event-log.ts` / `src/pipeline.ts` / `src/server.ts`。近期实现重点是控制面打磨:plan_progress 展示规划期 LLM 输入输出、events.log 重建 timeline、plan_review rerun 清理 workflow/runs/events 并重触发 plan、scheduler_decision 与 node_selected 分离以避免 UI 重复失败。
+
+设计修正(2026-07-15):此前"claim 直接作为 deliverable"被证明会污染产物真相源,导致过程自述覆盖正式输出。新锁定方向是运行时内核 + artifact contract:claim 只作证词,声明 outputs 的 artifact snapshot 才是 verifier 输入。代码仍需按本节修正。
 
 核心执行模型(本次重构):
 - [x] 0. 重构动机
@@ -731,11 +789,11 @@ verifier 主力 command/tests + anti-cheat、workdir git 隔离 + 每节点 diff
 - [x] 进度真相层(scheduler 吃 verdict 不吃 claim,buildProgressTruth 机械折叠)—— 已实现
 - [x] 重节点走 hermes CLI(带 web 工具)+ 执行过程实时流 —— 已实现
 - [x] 人审 failure 场景展示原因+最近产出+重试 —— 已实现
-- [x] diagnostician 归因环节(五类根因)—— 已实现
+- [~] diagnostician 归因环节(六类根因)—— A-E 已实现;F_artifact_contract_failure 待实现
 - [x] 指令组装五要素(desc+checks+软引导+上下文+失败反馈)—— 已实现
-- [x] deliverable 落盘与 verifier 判 deliverable —— 已实现;轻 LLM 规整层暂不在主路径调用,避免过度清洗丢内容
-- [x] scheduler 路由(五类根因→修复动作,高频自动/低频人审)—— 已实现
-- [x] verifier 判 deliverable(非 claim),轻节点不一致也走归因 —— 已实现
+- [~] artifact contract(声明 outputs → artifact snapshot → 机械契约检查 → verifier)—— 设计已锁定,代码待实现
+- [x] scheduler 路由(六类根因→修复动作,高频自动/低频人审)—— A-E 已实现;F_artifact_contract_failure 待实现
+- [~] verifier 判 artifact snapshot(非 claim),轻节点不一致也走归因 —— 轻节点已实现;重节点 artifact snapshot 输入待实现
 
 ---
 

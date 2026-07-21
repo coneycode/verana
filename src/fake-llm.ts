@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+
 import type { LlmClient, ModelRole } from "./llm.js";
 import type { ExecutorAdapter, AgentRun } from "./executors.js";
 
@@ -34,14 +37,31 @@ export function fakeExecutorContent() {
   return "# 交付内容\n\n这是 fake LLM 产出的交付物。";
 }
 
+function extractOutputPaths(prompt: string): string[] {
+  const block = prompt.match(/产出文件路径\(必须写到这些路径\):\n([\s\S]*?)(?:\n\n|$)/)?.[1] ?? "";
+  const paths = block
+    .split("\n")
+    .map((line) => line.replace(/^[-*]\s*/, "").trim())
+    .map((line) => line.match(/^([^:]+):/)?.[1]?.trim())
+    .filter((path): path is string => Boolean(path));
+  return [...new Set(paths)];
+}
+
 export class FakeExecutorAdapter implements ExecutorAdapter {
   readonly name = "fake-executor";
   readonly capabilities = { name: "fake-executor", capabilities: ["web", "browser", "long_running", "skills", "terminal", "file"] };
 
   async probe() { return { available: true, command: "fake" }; }
-  async execute(prompt: string, _workdir: string, _opts?: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number; onOutputLine?: (line: string) => void }): Promise<AgentRun> {
+  async execute(prompt: string, workdir: string, _opts?: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number; onOutputLine?: (line: string) => void }): Promise<AgentRun> {
+    const outputPaths = extractOutputPaths(prompt);
+    const effectivePaths = outputPaths.length > 0 ? outputPaths : (prompt.includes("solution/chapters") ? ["solution/chapters/"] : []);
+    for (const outputPath of effectivePaths) {
+      const target = outputPath.endsWith("/") ? join(workdir, outputPath, "content.md") : join(workdir, outputPath);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, `# 正式交付物(模拟)\n\n## 正文\n\n这是 fake executor 写入声明 output 的正式正文,用于模拟创作类交付物。\n\n## 产品概览\n\n产品定义、核心功能、目标用户、定价和竞品定位均有覆盖。\n\n## 评测3维\n\n- 自动化测试:覆盖核心流程和回归场景。\n- 效果评估:基于任务完成率、准确率和用户反馈评估。\n- 评分体系:使用可复现的多维评分表。\n\n## 可观测5维\n\n- 链路追踪:记录请求和任务执行链路。\n- 日志:保留关键输入、输出和异常。\n- 指标:统计延迟、错误率和吞吐。\n- 告警:对失败率和超时设置阈值。\n- Dashboard:集中展示运行状态和质量趋势。\n\n## 问题\n\n需要确保交付物不是执行过程日志。\n\n## 方案\n\n通过结构契约和 artifact 校验约束正式正文。\n\n## 实现细节\n\n声明 output 被写入独立文件,后续由 artifact snapshot 冻结并验证。\n\n## 验证\n\n验证包括结构检查、禁止模式检查和语义验收。\n\n## 结论与建议\n\n建议继续保持结构契约作为运行时硬约束。\n\n## 来源\n\n1. https://example.com/source-1\n2. https://example.com/source-2`, "utf8");
+    }
     return {
-      claim: `# 调研产出(模拟)\n\n基于 prompt 完成调研。\n\n来源:\n1. https://example.com/source-1\n2. https://example.com/source-2\n\n要点:产品定义、功能、用户、定价、竞品均有覆盖。`,
+      claim: `# Claim\n\n已完成节点执行,正式正文已写入声明 output。`,
       exitCode: 0,
       raw: "fake executor output",
     };

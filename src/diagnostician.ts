@@ -3,14 +3,15 @@ import type { CapabilityNode, GraphWorkflowSpec, VerdictRecord } from "./types.j
 import { renderBlackboardForContext } from "./blackboard.js";
 
 /**
- * 根因类型(五类,覆盖链路每一环,不重叠)
+ * 根因类型(六类,覆盖链路每一环,不重叠)
  * - A 指令不具体:节点对、能力对,但指令模糊致 executor 自由发挥偏了
  * - B 能力缺口:根本没有能干这件事的节点,之前靠现有节点硬顶
  * - C 上下文缺失/错误:节点对、指令对,但输入(blackboard/inputs)不对
  * - D 验收标准不合理:executor 没错,是 verifier 的 checks 定歪了
  * - E 目标/规划有问题:目标本身不清晰/矛盾,或规划方向错
+ * - F 产物契约失败:artifact 缺失、为空、像过程日志/claim,或 scaffold 读错对象
  */
-export type RootCauseType = "A_instruction_vague" | "B_capability_gap" | "C_context_error" | "D_standard_unreasonable" | "E_goal_problem";
+export type RootCauseType = "A_instruction_vague" | "B_capability_gap" | "C_context_error" | "D_standard_unreasonable" | "E_goal_problem" | "F_artifact_contract_failure";
 
 export interface DiagnosisResult {
   root_cause: RootCauseType;
@@ -24,7 +25,7 @@ const DIAGNOSTICIAN_SYSTEM = `你是一个归因者(diagnostician)。你的职�
 你必须用 JSON 返回:
 {"root_cause": "根因类型", "explanation": "为什么判定为这个根因(具体说明)"}
 
-根因类型(五选一,只能选一个主根因):
+根因类型(六选一,只能选一个主根因):
 
 A_instruction_vague — 指令不具体
 节点本身是对的、能力也是对的,但给执行者的指令不够具体,导致它自由发挥偏了。
@@ -54,6 +55,11 @@ E_goal_problem — 目标/规划有问题
 典型:目标太模糊导致怎么做都不对,或规划的能力清单方向跑偏。
 判断线索:多个节点反复失败,失败原因各不相同但都指向"目标/规划的根子"。
 
+F_artifact_contract_failure — 产物契约失败
+scaffold 收集到的 artifact 缺失、为空、太小、像过程日志/claim,或 verifier/engine 读错对象。
+典型:executor 最终回复说“已完成”,但声明 outputs 没有真实正文;正式文件里全是“让我/现在/已完成”等过程自述。
+判断线索:verdict.method=artifact_contract 或 failure_class=F_artifact_contract_failure;这是确定性事实层已经判定的失败,不要重新归为普通指令不具体。
+
 规则:
 - 只选一个主根因(最关键的那个),多个根因时选最重要的
 - explanation 必须具体,引用 verdict 理由和产出的实际内容做依据
@@ -64,7 +70,7 @@ export interface DiagnosisInput {
   node: CapabilityNode;
   verdict: VerdictRecord;
   claim: string;
-  deliverable: string;
+  artifact: string;
   instruction: string;
   blackboard: Record<string, unknown>;
   spec: GraphWorkflowSpec;
@@ -76,7 +82,14 @@ export async function diagnoseFailure(
   client: LlmClient,
   input: DiagnosisInput,
 ): Promise<DiagnosisResult> {
-  const { node, verdict, claim, deliverable, instruction, blackboard, spec, failCount, previousDiagnoses } = input;
+  if (input.verdict.failure_class === "F_artifact_contract_failure" || input.verdict.method === "artifact_contract") {
+    return {
+      root_cause: "F_artifact_contract_failure",
+      explanation: `artifact contract failed: ${input.verdict.reasons.join("; ")}`,
+    };
+  }
+
+  const { node, verdict, claim, artifact, instruction, blackboard, spec, failCount, previousDiagnoses } = input;
 
   const capList = spec.capabilities.map(c => `- ${c.id} [${c.kind}]: ${c.desc}`).join("\n");
   const checksList = (node.checks ?? []).map(c => `- [${c.method}] ${c.desc}`).join("\n");
@@ -104,8 +117,8 @@ export async function diagnoseFailure(
     `## 执行者原始产出(claim,带对话外壳)`,
     claim.slice(0, 1500) || "(空)",
     "",
-    `## 规整后产出(deliverable)`,
-    deliverable.slice(0, 1500) || "(空)",
+    `## Artifact Snapshot / 机械事实层`,
+    artifact.slice(0, 1500) || "(空)",
     "",
     `## 验证者判定(verdict)`,
     `判定: FAIL`,

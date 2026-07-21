@@ -16,6 +16,7 @@ function makeSpec(overrides: Partial<GraphWorkflowSpec> = {}): GraphWorkflowSpec
     scripts: [],
     capabilities: [{
       id: "write_chapter", kind: "agent", desc: "写一章",
+      outputs: [{ path: "solution/chapters/", desc: "章节正文" }],
       checks: [{ method: "llm_rubric", desc: ">=3000字" }],
       updates: ["summary"],
     }],

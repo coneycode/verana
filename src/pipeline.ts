@@ -7,6 +7,7 @@ import type { CapabilityNode, GraphWorkflowSpec, GraphRuntime } from "./types.js
 import { validateGraphWorkflow } from "./workflow-validator.js";
 import { checkSufficiency } from "./sufficiency-checker.js";
 import { projectEvent, type EventBus } from "./events.js";
+import { getDefaultDeliverableContract } from "./artifacts.js";
 
 // 重导出图执行引擎
 export { runGraphProject, readGraphSpec, applyHumanVerdict } from "./graph-engine.js";
@@ -167,6 +168,8 @@ function buildComposerPrompt(goal: string, clarifications: Array<{ q: string; a:
 }
 
 function assembleSpec(projectId: string, rawGoal: string, r: ComposerLlmResult): GraphWorkflowSpec {
+  const deliverableType = r.deliverable_type ?? "research";
+  const deliverableContract = getDefaultDeliverableContract(deliverableType);
   const capabilities: CapabilityNode[] = (r.capabilities ?? []).map((c) => ({
     id: c.id,
     kind: c.kind === "agent" ? "agent" : "light",
@@ -187,7 +190,7 @@ function assembleSpec(projectId: string, rawGoal: string, r: ComposerLlmResult):
     goal: {
       raw: rawGoal,
       clarified: r.clarified || rawGoal,
-      deliverable_type: r.deliverable_type ?? "research",
+      deliverable_type: deliverableType,
       iterative: r.iterative ?? false,
       acceptance: r.acceptance ?? [],
     },
@@ -212,9 +215,28 @@ function assembleSpec(projectId: string, rawGoal: string, r: ComposerLlmResult):
     },
     entry_node: r.entry_node ?? capabilities[0]?.id ?? "",
     completion_criteria: r.completion_criteria ?? [],
-    hard_constraints: (r as { hard_constraints?: string[] }).hard_constraints ?? [],
+    hard_constraints: [
+      ...((r as { hard_constraints?: string[] }).hard_constraints ?? []),
+      `交付物必须满足结构契约: ${deliverableContract.required_sections.join(" / ")}`,
+      `交付物禁止出现过程自述模式: ${deliverableContract.forbidden_patterns.join(" / ")}`,
+    ],
     soft_guidance: (r as { soft_guidance?: string[] }).soft_guidance ?? [],
+    deliverable_contract: deliverableContract,
     policies: { long_running: { idle_watchdog: "30m", max_wall: "4h" }, on_failure: "stop_and_report" },
+  };
+}
+
+function withDeliverableContract(spec: GraphWorkflowSpec): GraphWorkflowSpec {
+  if (spec.deliverable_contract) return spec;
+  const deliverableContract = getDefaultDeliverableContract(spec.goal.deliverable_type);
+  return {
+    ...spec,
+    hard_constraints: [
+      ...(spec.hard_constraints ?? []),
+      `交付物必须满足结构契约: ${deliverableContract.required_sections.join(" / ")}`,
+      `交付物禁止出现过程自述模式: ${deliverableContract.forbidden_patterns.join(" / ")}`,
+    ],
+    deliverable_contract: deliverableContract,
   };
 }
 
@@ -228,10 +250,11 @@ export async function composeGraphWorkflow(
   const state = await getProject(rootDir, projectId);
   const dir = projectPath(rootDir, projectId);
 
-  const validation = validateGraphWorkflow(spec);
+  const normalizedSpec = withDeliverableContract(spec);
+  const validation = validateGraphWorkflow(normalizedSpec);
   if (!validation.passed) throw new Error(`Workflow failed hard checks: ${validation.errors.join("; ")}`);
 
-  await writeYaml(join(dir, "solution", "workflow.yaml"), spec);
+  await writeYaml(join(dir, "solution", "workflow.yaml"), normalizedSpec);
   await mkdir(join(dir, "agents"), { recursive: true });
   for (const agentName of spec.agents) {
     await writeYaml(join(dir, "agents", `${agentName}.yaml`), { name: agentName, role: agentName });
@@ -254,5 +277,5 @@ export async function composeGraphWorkflow(
   };
   state.status.workflows.solution = runtime;
   await saveProjectState(rootDir, state);
-  return spec;
+  return normalizedSpec;
 }

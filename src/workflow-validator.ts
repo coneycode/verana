@@ -1,3 +1,4 @@
+import { validateRelativeOutputPath } from "./artifacts.js";
 import type { GraphWorkflowSpec } from "./types.js";
 
 export interface ValidationResult {
@@ -19,6 +20,17 @@ export function validateGraphWorkflow(spec: GraphWorkflowSpec): ValidationResult
     if (!cap.desc) errors.push(`capability ${cap.id} has no desc`);
     if (!cap.checks || cap.checks.length === 0) errors.push(`capability ${cap.id} has no checks (no check no execute)`);
     if (cap.kind !== "light" && cap.kind !== "agent") errors.push(`capability ${cap.id} kind must be light|agent`);
+    if (cap.kind === "agent" && (!cap.outputs || cap.outputs.length === 0)) {
+      errors.push(`capability ${cap.id} is agent but has no outputs (artifact contract required)`);
+    }
+    const outputPaths = new Set<string>();
+    for (const output of cap.outputs ?? []) {
+      if (outputPaths.has(output.path)) errors.push(`capability ${cap.id} has duplicate output path: ${output.path}`);
+      outputPaths.add(output.path);
+      for (const failure of validateRelativeOutputPath(output.path)) {
+        errors.push(`capability ${cap.id} ${failure.message}`);
+      }
+    }
   }
 
   // 入口节点存在

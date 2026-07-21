@@ -19,7 +19,7 @@ function makeSpec(pid: string): GraphWorkflowSpec {
     clarifications: [], required_capabilities: ["web"], selected_executor: "hermes",
     agents: ["writer"], skills: [], scripts: [],
     capabilities: [
-      { id: "write_chapter", kind: "agent", desc: "写一章", checks: [{ method: "llm_rubric", desc: ">=3000字" }], updates: ["summary"] },
+      { id: "write_chapter", kind: "agent", desc: "写一章", outputs: [{ path: "solution/chapters/", desc: "章节正文" }], checks: [{ method: "llm_rubric", desc: ">=3000字" }], updates: ["summary"] },
       { id: "update_memory", kind: "light", desc: "更新摘要", checks: [{ method: "llm_rubric", desc: "摘要有界" }], updates: ["summary"] },
     ],
     guardrails: { hard: { max_iterations: 30 }, soft: [], human_checkpoint_every: 3 },

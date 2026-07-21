@@ -78,3 +78,7 @@ To switch to OpenAI-compatible API, replace HttpLlmClient in llm.ts.
 docs/design/v2-orchestration-design.md — see Appendix B for implementation status.
 
 Per AGENTS.md: before changing code, inspect the design-doc git diff/log first.
+
+## License
+
+Verana is licensed under the PolyForm Noncommercial License 1.0.0. You may use it for free for noncommercial purposes, but commercial use is not allowed except for the limited evaluation periods described in [LICENSE](LICENSE).

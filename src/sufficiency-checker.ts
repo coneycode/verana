@@ -1,5 +1,6 @@
 import type { LlmClient } from "./llm.js";
 import type { GraphWorkflowSpec } from "./types.js";
+import { getEffectiveDeliverableContract, renderDeliverableContract } from "./artifacts.js";
 
 /**
  * 充分性检查器(独立 evaluator 角色,生成/审查不同源)。
@@ -8,7 +9,7 @@ import type { GraphWorkflowSpec } from "./types.js";
  */
 
 export interface SufficiencyIssue {
-  layer: "path_completeness" | "instruction_specificity" | "check_alignment";
+  layer: "path_completeness" | "instruction_specificity" | "check_alignment" | "deliverable_contract";
   severity: "error" | "warning";
   node_id?: string;
   description: string;
@@ -37,9 +38,15 @@ const CHECKER_SYSTEM = `你是一个规划充分性检查器。你审查 Compose
    - 如果硬约束说"输出纯正文",对应的产出节点 checks 里要有这条
    - 检查有没有硬约束没落到任何节点的 checks
 
+4. 交付物契约(deliverable_contract):产出节点是否能生成符合类型的正式交付物?
+   - research 必须能产出结构化调研正文,覆盖产品概览、评测3维、可观测5维、结论与建议
+   - creative 必须能产出正文,不能把过程笔记冒充正文
+   - implementation 必须能产出问题、方案、实现细节、验证
+   - agent 节点的 desc/checks/outputs 至少一个位置必须体现这些结构要求
+
 返回 JSON:
 {"passed": true/false, "issues": [
-  {"layer": "path_completeness|instruction_specificity|check_alignment", "severity": "error|warning", "node_id": "相关节点id(可选)", "description": "问题描述"}
+  {"layer": "path_completeness|instruction_specificity|check_alignment|deliverable_contract", "severity": "error|warning", "node_id": "相关节点id(可选)", "description": "问题描述"}
 ]}
 
 passed=true 仅当没有 error 级问题。warning 不阻塞但需报告。
@@ -54,8 +61,11 @@ export async function checkSufficiency(
     return `- ${c.id} [${c.kind}]: ${c.desc} | checks: ${checks || "(无)"} | outputs: ${(c.outputs ?? []).map(o => o.path).join(",")}`;
   }).join("\n");
 
+  const deliverableContract = getEffectiveDeliverableContract(spec.goal.deliverable_type, spec.deliverable_contract);
   const userPrompt = [
     `目标: ${spec.goal.clarified}`,
+    `交付物类型: ${spec.goal.deliverable_type}`,
+    renderDeliverableContract(deliverableContract),
     "",
     `完成标准:`,
     ...spec.completion_criteria.map(c => `  - ${c}`),
@@ -71,7 +81,7 @@ export async function checkSufficiency(
     "",
     `入口节点: ${spec.entry_node}`,
     "",
-    "请三层审查:路径完备性、指令具体性、验收对齐。",
+    "请四层审查:路径完备性、指令具体性、验收对齐、交付物契约。",
   ].join("\n");
 
   const result = await client.completeJson<SufficiencyResult>("evaluator", CHECKER_SYSTEM, userPrompt);
