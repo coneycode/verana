@@ -154,6 +154,92 @@ export async function runGraphProject(rootDir: string, projectId: string, client
       await saveProjectState(rootDir, state);
       continue;
     }
+    if (action === "materialize") {
+      // scheduler 决策:让 materializer 从已有产出整理正式产物
+      // 在上次失败的 run 上操作,不重新执行节点
+      const nodeId = wf.current_node;
+      if (!nodeId) {
+        wf.workflow_status = "awaiting_human";
+        wf.awaiting = "human";
+        wf.awaiting_reason = "materialize 但没有 current_node";
+        wf.awaiting_scene = "anomaly";
+        await saveProjectState(rootDir, state);
+        return;
+      }
+      const node = spec.capabilities.find(c => c.id === nodeId);
+      if (!node) {
+        wf.workflow_status = "awaiting_human";
+        wf.awaiting = "human";
+        wf.awaiting_reason = `materialize 但节点 ${nodeId} 不存在`;
+        wf.awaiting_scene = "anomaly";
+        await saveProjectState(rootDir, state);
+        return;
+      }
+      const lastRunId = wf.runs[nodeId]?.[wf.runs[nodeId].length - 1];
+      if (!lastRunId) {
+        wf.workflow_status = "awaiting_human";
+        wf.awaiting = "human";
+        wf.awaiting_reason = `materialize 但节点 ${nodeId} 没有 run`;
+        wf.awaiting_scene = "anomaly";
+        await saveProjectState(rootDir, state);
+        return;
+      }
+      const runDir = join(dir, "runs", lastRunId);
+      // 读取上次失败的 artifact report
+      let snapshot = await collectArtifacts({ projectDir: dir, runDir, runId: lastRunId, node });
+      let report = await validateArtifactContract({ snapshot, node, projectDir: dir, deliverableType: spec.goal.deliverable_type, deliverableContract });
+      if (report.passed) {
+        // 已经过了,不需要 materialize,继续正常流程
+        wf.iteration += 1;
+        await saveProjectState(rootDir, state);
+        continue;
+      }
+      // 调 materializer
+      const instruction = ""; // materialize 不需要原 instruction,materializer 从 artifact/claim 提取
+      const materialization = await materializeArtifacts({ client, projectDir: dir, runDir, snapshot, report, node, deliverableType: spec.goal.deliverable_type, deliverableContract, instruction });
+      await writeYaml(join(runDir, "materialization-report.yaml"), materialization);
+      await appendEvent(solutionDir, {
+        type: materialization.passed ? "artifact_materialized" : "artifact_materialization_failed",
+        node: nodeId,
+        run_id: lastRunId,
+        reason: materialization.passed ? `materialized: ${materialization.written.join(", ")}` : materialization.skipped_reason,
+        data: { report: join("runs", lastRunId, "materialization-report.yaml"), written: materialization.written, targets: materialization.targets },
+      });
+      if (materialization.passed) {
+        // 重新 collect/validate
+        snapshot = await collectArtifacts({ projectDir: dir, runDir, runId: lastRunId, node });
+        report = await validateArtifactContract({ snapshot, node, projectDir: dir, deliverableType: spec.goal.deliverable_type, deliverableContract });
+        await writeYaml(join(runDir, "artifact-report.yaml"), report);
+        await appendEvent(solutionDir, { type: report.passed ? "artifact_validated" : "artifact_failed", node: nodeId, run_id: lastRunId, data: { passed: report.passed, report: join("runs", lastRunId, "artifact-report.yaml"), failure_codes: report.outputs.flatMap(o => o.failures.map(f => f.code)) } });
+        if (report.passed) {
+          // materialize 成功,进 verifier 做语义判定
+          const artifactBody = await renderArtifactForVerifier(snapshot);
+          const verdict = await verifyAgentNode(rootDir, projectId, lastRunId, node, spec, client, bus, artifactBody, snapshot.entries.map(e => e.snapshot_path));
+          await writeYaml(join(dir, "runs", lastRunId, "verdict.yaml"), verdict);
+          await appendEvent(solutionDir, { type: "verdict", node: nodeId, run_id: lastRunId, reason: `passed=${verdict.passed} ${verdict.reasons.join("; ")}`, data: { passed: verdict.passed } });
+          bus?.publish(projectEvent("verdict", projectId, { node: nodeId, runId: lastRunId, verdict }));
+          if (verdict.passed) {
+            // 通过了,更新 blackboard + 快照
+            if (node.updates && node.updates.length > 0) {
+              await applyBlackboardUpdate(client, node, await renderArtifactForVerifier(snapshot), wf.blackboard, spec);
+              await appendEvent(solutionDir, { type: "blackboard_updated", node: nodeId, data: { fields: node.updates } });
+              bus?.publish(projectEvent("blackboard_updated", projectId, { node: nodeId, fields: node.updates }));
+            }
+            wf.iteration += 1;
+            await appendEvent(solutionDir, { type: "node_done", node: nodeId, run_id: lastRunId });
+            const seq = await nextSeq(solutionDir);
+            await writeSnapshot(solutionDir, { seq, current_node: nodeId, iteration: wf.iteration, blackboard: wf.blackboard, awaiting: "none" });
+            await saveProjectState(rootDir, state);
+            continue;
+          }
+          // materialize 后 verifier 判 fail → 走归因(scheduler 下一轮处理)
+        }
+      }
+      // materialize 失败或重新 validate 还是 fail → iteration++,下一轮 scheduler 会看到并路由
+      wf.iteration += 1;
+      await saveProjectState(rootDir, state);
+      continue;
+    }
     if (action === "request_capability" || (decision.capability_gap && !decision.next_node)) {
       const review = await reviewCapabilityGap(client, spec, decision.capability_gap, wf.blackboard, decision.reason);
       if (review.reasonable && review.newNode) {
@@ -229,38 +315,6 @@ export async function runGraphProject(rootDir: string, projectId: string, client
         deliverableContract,
       });
 
-      if (!report.passed) {
-        const materialization = await materializeArtifacts({
-          client,
-          projectDir: dir,
-          runDir,
-          snapshot,
-          report,
-          node,
-          deliverableType: spec.goal.deliverable_type,
-          deliverableContract,
-          instruction,
-        });
-        await writeYaml(join(runDir, "materialization-report.yaml"), materialization);
-        await appendEvent(solutionDir, {
-          type: materialization.passed ? "artifact_materialized" : "artifact_materialization_failed",
-          node: node.id,
-          run_id: runId,
-          reason: materialization.passed ? `materialized: ${materialization.written.join(", ")}` : materialization.skipped_reason,
-          data: { report: join("runs", runId, "materialization-report.yaml"), written: materialization.written, targets: materialization.targets },
-        });
-        if (materialization.passed) {
-          snapshot = await collectArtifacts({ projectDir: dir, runDir, runId, node });
-          report = await validateArtifactContract({
-            snapshot,
-            node,
-            projectDir: dir,
-            deliverableType: spec.goal.deliverable_type,
-            deliverableContract,
-          });
-        }
-      }
-
       await writeYaml(join(runDir, "artifact-report.yaml"), report);
       await appendEvent(solutionDir, { type: report.passed ? "artifact_validated" : "artifact_failed", node: node.id, run_id: runId, data: { passed: report.passed, report: join("runs", runId, "artifact-report.yaml"), failure_codes: report.outputs.flatMap(o => o.failures.map(f => f.code)) } });
       if (!report.passed) {
@@ -288,16 +342,8 @@ export async function runGraphProject(rootDir: string, projectId: string, client
       await appendEvent(solutionDir, { type: "diagnosis", node: node.id, run_id: runId, reason: `根因: ${diagnosis.root_cause} — ${diagnosis.explanation.slice(0, 200)}`, data: { root_cause: diagnosis.root_cause, explanation: diagnosis.explanation, fail_count: retries } });
       bus?.publish(projectEvent("diagnosis", projectId, { node: node.id, runId, diagnosis }));
 
-      if (retries >= maxRetries) {
-        wf.workflow_status = "awaiting_human";
-        wf.awaiting = "human";
-        wf.awaiting_reason = `节点 ${node.id} 失败且重试耗尽 (${retries}次)。根因: ${diagnosis.root_cause} — ${diagnosis.explanation.slice(0, 200)}。验证理由: ${verdict.reasons.join("; ").slice(0, 200)}`;
-        wf.awaiting_scene = "failure";
-        await saveProjectState(rootDir, state);
-        bus?.publish(projectEvent("human_required", projectId, { scene: "failure", reason: wf.awaiting_reason, verdict, diagnosis }));
-        return;
-      }
-      // 带归因结果重跑(下一轮 scheduler 读到根因,自主决定路由)
+      // 不在这里检查 retries——让 scheduler 下一轮决策(materialize/retry/human)
+      // scheduler 看到 progress truth 里的根因和重试次数后自主路由
       continue;
     }
 

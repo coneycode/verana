@@ -13,6 +13,7 @@ const SCHEDULER_SYSTEM = `你是一个调度大脑(scheduler)。你是调度决�
 - "switch_node":换一个现有节点(当前节点不对路,清单里有更合适的)
 - "request_capability":请求新增能力(capability_gap 描述需要什么,交 Composer 复核)
 - "skip_node":跳过该非必要节点继续(该节点反复失败但不影响主交付)
+- "materialize":让 materializer 从已有产出(claim/stream/坏artifact)整理出正式产物(仅限F根因且failure_codes属于形态类:looks_like_*/metadata_only/too_small/structure_*;如果failure_codes含missing/empty说明根本没有内容,不该materialize应重跑)
 - "human":转人审(低频重大决策:删改节点/回澄清/调完成标准/终止)
 
 决策规则:
@@ -24,7 +25,11 @@ const SCHEDULER_SYSTEM = `你是一个调度大脑(scheduler)。你是调度决�
   - C_context_error(上下文错):action="retry_with_feedback"(blackboard 已修正,重跑)
   - D_standard_unreasonable(标准不合理):action="human"(验收标准要改,属重大决策)
   - E_goal_problem(目标/规划问题):action="human"(回澄清或重规划,属重大决策)
-  - F_artifact_contract_failure(产物契约失败):优先 action="human";只有明显是产物太短/像自述且仍有重试余量时,才允许 action="retry_with_feedback"
+  - F_artifact_contract_failure(产物契约失败):看 failure_codes 判断
+    - failure_codes 含 declared_output_missing/declared_output_empty:executor 根本没产出内容,action="retry_with_feedback"(重跑让executor产出)
+    - failure_codes 只有形态类(looks_like_*/metadata_only/too_small/structure_*):executor 有产出但形态不对,action="materialize"(让materializer整理)
+    - 同一节点已 materialize 过且还是 fail:action="retry_with_feedback"(materializer修不了,让executor重做)
+    - 同一节点 retry+materialize 循环超过2次:action="human"
 - 同一节点归因-修复循环超过2次还失败:action="human"
 - 如果清单里没有合适的能力:action="request_capability",capability_gap 描述需求
 - reason 必须具体,说明基于进度真相里的哪些事实(含根因)做的判断
@@ -35,7 +40,7 @@ export interface SchedulerDecision {
   reason: string;
   capability_gap: string;
   is_complete: boolean;
-  action?: "execute" | "retry_with_feedback" | "switch_node" | "request_capability" | "skip_node" | "human";
+  action?: "execute" | "retry_with_feedback" | "switch_node" | "request_capability" | "skip_node" | "human" | "materialize";
 }
 
 export async function runScheduler(

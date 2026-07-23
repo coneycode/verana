@@ -161,6 +161,25 @@ export function getProjectDeliverableContract(spec: Pick<GraphWorkflowSpec, "goa
   };
 }
 
+/**
+ * 结构层检查:按 deliverable_type 分流,不同类型走不同检查项。
+ * - research/creative: 文档结构检查(章节/禁止模式)
+ * - implementation: 代码检查(先留接口,返回空 failures)
+ */
+function validateStructureByType(text: string, deliverableType: DeliverableType, contractOverride: DeliverableContract | undefined, contract: OutputContract): ArtifactFailure[] {
+  switch (deliverableType) {
+    case "research":
+    case "creative":
+      // 文档类:章节结构 + 禁止模式
+      return validateDeliverableStructure(text, deliverableType, contractOverride);
+    case "implementation":
+      // 代码类:先留接口,不做结构检查(等实现阶段时加代码 checker)
+      return [];
+    default:
+      return [];
+  }
+}
+
 export function validateDeliverableStructure(text: string, deliverableType: DeliverableType, contractOverride?: DeliverableContract): ArtifactFailure[] {
   const contract = getEffectiveDeliverableContract(deliverableType, contractOverride);
   const failures: ArtifactFailure[] = [];
@@ -349,7 +368,7 @@ export async function validateArtifactContract(args: {
       }
       failures.push(...validateLookalikes(contract, text));
       if ((contract.role ?? "deliverable") === "deliverable" && args.deliverableType && text.trim()) {
-        failures.push(...validateDeliverableStructure(text, args.deliverableType, args.deliverableContract));
+        failures.push(...validateStructureByType(text, args.deliverableType, args.deliverableContract, contract));
       }
       outputs.push({
         declared_path: contract.path,
@@ -378,7 +397,7 @@ export async function validateArtifactContract(args: {
     failures.push(...validateFormat(contract, text));
     failures.push(...validateLookalikes(contract, text));
     if ((contract.role ?? "deliverable") === "deliverable" && args.deliverableType && text.trim()) {
-      failures.push(...validateDeliverableStructure(text, args.deliverableType, args.deliverableContract));
+      failures.push(...validateStructureByType(text, args.deliverableType, args.deliverableContract, contract));
     }
 
     outputs.push({

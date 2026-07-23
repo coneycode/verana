@@ -110,7 +110,7 @@ test("graph workflow: create → plan → approve → run → final_review", asy
   }
 });
 
-test("graph workflow materializes invalid runtime deliverable before final validation", async () => {
+test("graph workflow materializes invalid runtime deliverable via scheduler decision", async () => {
   setExecutorForTest(new BadResearchExecutorAdapter());
   const root = await mkdtemp(join(tmpdir(), "verana-srv-artifact-"));
   const client = buildSmartFakeClient();
@@ -130,21 +130,25 @@ test("graph workflow materializes invalid runtime deliverable before final valid
 
     const runResponse = await app.inject({ method: "POST", url: `/projects/${pid}/run` });
     assert.equal(runResponse.statusCode, 200);
-    await new Promise((r) => setTimeout(r, 1200));
+    await new Promise((r) => setTimeout(r, 2000));
 
     const stateResponse = await app.inject({ method: "GET", url: `/projects/${pid}` });
     const wf = stateResponse.json().status.workflows.solution;
+    // materialize 由 scheduler 决策,最终应该通过(不停留在 awaiting_human)
     assert.notEqual(wf.workflow_status, "awaiting_human");
 
+    // materialization report 应存在(scheduler 决策了 materialize)
     const materializationRaw = await readFile(join(root, "projects", pid, "runs", "run-0001", "materialization-report.yaml"), "utf8");
     assert.match(materializationRaw, /attempted: true/);
     assert.match(materializationRaw, /passed: true/);
-    assert.match(materializationRaw, /solution\/report.md/);
+    assert.match(materializationRaw, /solution\/report\.md/);
 
+    // materialize 后重新 validate 应通过
     const reportRaw = await readFile(join(root, "projects", pid, "runs", "run-0001", "artifact-report.yaml"), "utf8");
     assert.match(reportRaw, /passed: true/);
     assert.doesNotMatch(reportRaw, /deliverable_structure_missing_section/);
 
+    // verifier 判定应引用 artifact report
     const verdictRaw = await readFile(join(root, "projects", pid, "runs", "run-0001", "verdict.yaml"), "utf8");
     assert.match(verdictRaw, /artifact_report: runs\/run-0001\/artifact-report\.yaml/);
     assert.doesNotMatch(verdictRaw, /F_artifact_contract_failure/);

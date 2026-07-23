@@ -15,8 +15,6 @@ import {
 } from "./artifacts.js";
 
 const MATERIALIZABLE_FAILURES = new Set([
-  "declared_output_missing",
-  "declared_output_empty",
   "declared_output_too_small",
   "artifact_looks_like_claim",
   "artifact_looks_like_stream",
