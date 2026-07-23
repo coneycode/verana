@@ -131,11 +131,15 @@ export function buildSmartFakeClient(): FakeLlmClient {
     if (role === "evaluator" && system.includes("规划充分性检查器")) {
       return { json: { passed: true, issues: [] } };
     }
-    // Artifact materializer
+    // Artifact materializer — 从 prompt 提取目标路径和章节要求,生成对应内容
     if (role === "evaluator" && system.includes("artifact materializer")) {
       const match = user.match(/- (solution\/[^:]+):/);
       const path = match?.[1] ?? "solution/report.md";
-      return { json: { artifacts: [{ path, content: materializedResearchContent(), reason: "测试:基于提供证据生成结构化正文" }] } };
+      // 从 prompt 提取必需章节,生成对应内容
+      const sectionsMatch = user.match(/必需章节: (.+)/);
+      const sections = sectionsMatch?.[1]?.split(" / ").filter(Boolean) ?? ["产品概览", "主要发现", "结论与建议"];
+      const content = generateFakeDeliverable(sections);
+      return { json: { artifacts: [{ path, content, reason: "测试:基于提供证据生成结构化正文" }] } };
     }
     // 规整层
     if (role === "evaluator" && system.includes("产出规整器")) {
@@ -176,36 +180,14 @@ export function buildSmartFakeClient(): FakeLlmClient {
   });
 }
 
-function materializedResearchContent(): string {
-  return `# 结构化调研报告
-
-## 产品概览
-
-该产品提供 Agent Workflow 交付能力,核心价值是把规划、执行、验证和人审闭环连接起来。信息来源来自执行器收集的页面事实和运行证据。
-
-## 主要发现
-
-- 运行时会先做 artifact contract 校验,再进入语义验证。
-- 证据与正式正文被拆分为不同节点,减少过程日志冒充交付物的风险。
-- materializer 只对可修复的正式交付物做一次兜底沉淀。
-
-## 评测3维
-
-- 自动化测试:需要覆盖工作流规划、节点执行、artifact 校验和回归路径。
-- 效果评估:以交付物完整性、事实可追溯性和验证通过率评估。
-- 评分体系:按结构完整性、证据质量、可操作建议三项评分。
-
-## 可观测5维
-
-- 链路追踪:记录从规划到 artifact snapshot 的事件链。
-- 日志:保留 claim、stream、artifact report 和 verdict。
-- 指标:统计重试次数、失败类型和 materialization 命中率。
-- 告警:对连续 artifact contract failure 触发人审。
-- Dashboard:展示节点状态、artifact 状态和最终交付物质量。
-
-## 结论与建议
-
-建议继续将证据收集和结构化正文写作分离,并保留 runtime materializer 作为一次性兜底。`;
+function generateFakeDeliverable(sections: string[]): string {
+  const parts = ["# 结构化调研报告", ""];
+  for (const section of sections) {
+    parts.push(`## ${section}`, "");
+    parts.push(`${section}相关的正文内容,基于执行器收集的证据和来源整理。`);
+    parts.push("");
+  }
+  return parts.join("\n").trim();
 }
 
 function fakeComposerGraphSpec(userPrompt: string): unknown {

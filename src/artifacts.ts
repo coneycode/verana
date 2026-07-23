@@ -224,7 +224,7 @@ export function validateRelativeOutputPath(path: string): ArtifactFailure[] {
   if (isAbsolute(path)) {
     failures.push({ code: "output_path_unsafe", message: `output path must be relative: ${path}` });
   }
-  if (normalized === ".." || normalized.startsWith(`..`)) {
+  if (normalized === ".." || normalized.startsWith("../") || normalized.startsWith("..\\") || normalized.includes("/../") || normalized.includes("\\..\\")) {
     failures.push({ code: "output_path_unsafe", message: `output path escapes project root: ${path}` });
   }
   if (/^runs\/[^/]+\/(claim\.md|stream\.md|verdict\.yaml|artifact-report\.yaml)$/.test(normalized)) {
