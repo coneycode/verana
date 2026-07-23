@@ -91,7 +91,7 @@ export async function materializeArtifacts(args: {
   const stream = await readFile(join(args.runDir, "stream.md"), "utf8").catch(() => "");
   const artifactSnapshot = await renderArtifactForVerifier(args.snapshot).catch(() => "");
   const inputContents = await readNodeInputs(args.projectDir, args.node);
-  const contract = getEffectiveDeliverableContract(args.deliverableType, args.deliverableContract);
+  const contract = args.deliverableContract ?? getEffectiveDeliverableContract(args.deliverableType);
 
   const userPrompt = [
     `项目交付物类型: ${args.deliverableType}`,
