@@ -50,12 +50,15 @@ test("artifact collector freezes declared output snapshot", async () => {
   assert.doesNotMatch(frozen, /mutated/);
 });
 
-test("deliverable structure validator keeps generic research defaults separate from project-specific contracts", () => {
+test("deliverable structure is checked by verifier not mechanical validation", () => {
+  // 机械检查不再做章节匹配,交给 verifier 语义判断
   const badResearch = "# 调研笔记\n\n## 产品概览\n\n让我先看一下资料。";
   const researchFailures = validateDeliverableStructure(badResearch, "research");
+  // validateDeliverableStructure 仍然存在(供外部调用),但 validateArtifactContract 不再调它
+  // 这里只验证函数本身的行为不变,不影响 artifact contract
   assert.equal(researchFailures.some((f) => f.code === "deliverable_structure_missing_section"), true);
-  assert.equal(researchFailures.some((f) => f.message.includes("主要发现")), true);
 
+  // getProjectDeliverableContract 不再从澄清信息推导章节,只用 base + override
   const projectContract = getProjectDeliverableContract({
     goal: {
       raw: "竞品对比",
@@ -72,9 +75,12 @@ test("deliverable structure validator keeps generic research defaults separate f
     hard_constraints: ["必须客观呈现各产品能力现状"],
     deliverable_contract: undefined,
   });
-  assert.equal(projectContract.required_sections.includes("评测3维"), true);
-  assert.equal(projectContract.required_sections.includes("可观测5维"), true);
-  assert.equal(projectContract.required_sections.includes("功能矩阵"), true);
+  // 不再推导,只有 base 默认章节
+  assert.equal(projectContract.required_sections.includes("评测3维"), false);
+  assert.equal(projectContract.required_sections.includes("可观测5维"), false);
+  assert.equal(projectContract.required_sections.includes("功能矩阵"), false);
+  assert.equal(projectContract.required_sections.includes("产品概览"), true);
+  assert.equal(projectContract.required_sections.includes("主要发现"), true);
 
   const creativeFailures = validateDeliverableStructure("# 小说章节\n\n## 正文\n\n夜色压下来,街角的灯忽明忽暗。", "creative");
   assert.equal(creativeFailures.length, 0);
@@ -84,7 +90,7 @@ test("deliverable structure validator keeps generic research defaults separate f
   assert.equal(implementationFailures.some((f) => f.message.includes("验证")), true);
 });
 
-test("artifact validator applies deliverable structure contract", async () => {
+test("artifact contract does not mechanically check deliverable structure (verifier does)", async () => {
   const projectDir = await mkdtemp(join(tmpdir(), "verana-artifact-"));
   const runDir = join(projectDir, "runs", "run-0001");
   const source = join(projectDir, "solution", "report.md");
@@ -93,9 +99,10 @@ test("artifact validator applies deliverable structure contract", async () => {
 
   const snapshot = await collectArtifacts({ projectDir, runDir, runId: "run-0001", node: agentNode });
   const report = await validateArtifactContract({ snapshot, node: agentNode, projectDir, deliverableType: "research" });
-  assert.equal(report.passed, false);
-  assert.equal(report.outputs.some((o) => o.failures.some((f) => f.code === "deliverable_structure_missing_section")), true);
-  assert.equal(report.outputs.some((o) => o.failures.some((f) => f.code === "deliverable_structure_forbidden_pattern")), true);
+  // 机械检查不再产生 deliverable_structure failure(交给 verifier 语义判断)
+  // 但 process_log 检查仍然会触发("让我先"是过程话术)
+  assert.equal(report.outputs.some((o) => o.failures.some((f) => f.code === "deliverable_structure_missing_section")), false);
+  assert.equal(report.outputs.some((o) => o.failures.some((f) => f.code === "deliverable_structure_forbidden_pattern")), false);
 });
 
 test("artifact validator validates and renders directory deliverable contents", async () => {

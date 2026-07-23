@@ -128,34 +128,13 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
   return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
 }
 
-function containsAny(source: string, terms: string[]): boolean {
-  return terms.some((term) => source.includes(term));
-}
-
-function deriveResearchSections(source: string): string[] {
-  const sections: string[] = [];
-  if (containsAny(source, ["功能矩阵", "矩阵对比", "对比表格", "表格对比"])) sections.push("功能矩阵");
-  if (containsAny(source, ["评测能力", "自动化测试", "效果评估", "评分体系"])) sections.push("评测3维");
-  if (containsAny(source, ["可观测能力", "链路追踪", "日志", "指标监控", "告警", "流量回放", "Dashboard"])) sections.push("可观测5维");
-  if (containsAny(source, ["优劣势", "定性描述", "分析对比", "差异分析"])) sections.push("优劣势分析");
-  return sections;
-}
-
 export function getProjectDeliverableContract(spec: Pick<GraphWorkflowSpec, "goal" | "clarifications" | "hard_constraints"> & { deliverable_contract?: Partial<DeliverableContract> }): DeliverableContract {
   const base = getDefaultDeliverableContract(spec.goal.deliverable_type);
-  const projectSource = [
-    spec.goal.raw,
-    spec.goal.clarified,
-    ...spec.goal.acceptance,
-    ...(spec.hard_constraints ?? []),
-    ...(spec.clarifications ?? []).map((item) => `${item.q}\n${item.a}`),
-  ].join("\n");
-  const projectRequired = spec.goal.deliverable_type === "research" ? deriveResearchSections(projectSource) : [];
   const override = spec.deliverable_contract;
   const notes = uniqueStrings([...(base.notes ?? []), ...(override?.notes ?? [])]);
 
   return {
-    required_sections: uniqueStrings([...base.required_sections, ...projectRequired, ...(override?.required_sections ?? [])]),
+    required_sections: uniqueStrings([...base.required_sections, ...(override?.required_sections ?? [])]),
     forbidden_patterns: uniqueStrings([...base.forbidden_patterns, ...(override?.forbidden_patterns ?? [])]),
     notes: notes.length > 0 ? notes : undefined,
   };
@@ -163,21 +142,13 @@ export function getProjectDeliverableContract(spec: Pick<GraphWorkflowSpec, "goa
 
 /**
  * 结构层检查:按 deliverable_type 分流,不同类型走不同检查项。
- * - research/creative: 文档结构检查(章节/禁止模式)
+ * - research/creative: 交给 verifier 语义判断,不做机械章节匹配
  * - implementation: 代码检查(先留接口,返回空 failures)
  */
-function validateStructureByType(text: string, deliverableType: DeliverableType, contractOverride: DeliverableContract | undefined, contract: OutputContract): ArtifactFailure[] {
-  switch (deliverableType) {
-    case "research":
-    case "creative":
-      // 文档类:章节结构 + 禁止模式
-      return validateDeliverableStructure(text, deliverableType, contractOverride);
-    case "implementation":
-      // 代码类:先留接口,不做结构检查(等实现阶段时加代码 checker)
-      return [];
-    default:
-      return [];
-  }
+function validateStructureByType(_text: string, _deliverableType: DeliverableType, _contractOverride: DeliverableContract | undefined, _contract: OutputContract): ArtifactFailure[] {
+  // 章节结构/禁止模式交给 verifier 语义判断,不做机械检查
+  // 原因:字符串匹配章节名不可靠,且 verifier 已拿到 deliverableContract 做 LLM 判断
+  return [];
 }
 
 export function validateDeliverableStructure(text: string, deliverableType: DeliverableType, contractOverride?: DeliverableContract): ArtifactFailure[] {

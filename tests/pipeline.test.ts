@@ -83,9 +83,10 @@ test("composeGraphWorkflow splits research into evidence collection and structur
   assert.ok(writer?.inputs?.some((input) => input.path === "solution/evidence/raw_research.md"));
   assert.equal(writer?.outputs?.[0].role, "deliverable");
   assert.equal(normalized.entry_node, "collect_evidence");
-  assert.ok(normalized.deliverable_contract?.required_sections.includes("评测3维"));
-  assert.ok(normalized.deliverable_contract?.required_sections.includes("可观测5维"));
-  assert.ok(normalized.deliverable_contract?.required_sections.includes("功能矩阵"));
+  // deliverable_contract 不再从澄清推导章节,只有 base 默认(产品概览/主要发现/结论与建议)
+  assert.ok(normalized.deliverable_contract?.required_sections.includes("产品概览"));
+  assert.ok(normalized.deliverable_contract?.required_sections.includes("主要发现"));
+  assert.ok(normalized.deliverable_contract?.required_sections.includes("结论与建议"));
 });
 
 function projectPath(root: string, id: string) { return join(root, "projects", id); }

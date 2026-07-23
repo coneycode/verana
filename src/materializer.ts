@@ -20,8 +20,6 @@ const MATERIALIZABLE_FAILURES = new Set([
   "artifact_looks_like_stream",
   "artifact_looks_like_process_log",
   "artifact_metadata_only",
-  "deliverable_structure_missing_section",
-  "deliverable_structure_forbidden_pattern",
 ]);
 
 const MATERIALIZER_SYSTEM = `你是 artifact materializer。你的职责是把执行器留下的证据、claim、stream 或坏 artifact 整理成正式交付物文件。
