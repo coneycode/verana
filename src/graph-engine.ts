@@ -283,6 +283,20 @@ export async function runGraphProject(rootDir: string, projectId: string, client
       return;
     }
 
+    // 执行节点前:如果是重试(retry_with_feedback 或 execute 同一失败节点),检查硬护栏
+    // materialize 不算 retry,不受 maxRetries 限制(它是 scheduler 的规划手段,不是重试)
+    const maxRetries = spec.guardrails.hard.max_retries_per_node ?? 3;
+    const currentRetries = wf.node_retries[node.id] ?? 0;
+    if (currentRetries >= maxRetries) {
+      wf.workflow_status = "awaiting_human";
+      wf.awaiting = "human";
+      wf.awaiting_reason = `节点 ${node.id} 重试耗尽 (${currentRetries}次,上限 ${maxRetries})。scheduler 仍想执行,转人审。`;
+      wf.awaiting_scene = "failure";
+      await saveProjectState(rootDir, state);
+      bus?.publish(projectEvent("human_required", projectId, { scene: "failure", reason: wf.awaiting_reason }));
+      return;
+    }
+
     // 执行节点
     wf.current_node = node.id;
     wf.awaiting = "none_midstep";
@@ -331,7 +345,6 @@ export async function runGraphProject(rootDir: string, projectId: string, client
     if (!verdict.passed) {
       const retries = (wf.node_retries[node.id] ?? 0) + 1;
       wf.node_retries[node.id] = retries;
-      const maxRetries = spec.guardrails.hard.max_retries_per_node ?? 3;
 
       // 归因:判断根因(每次 fail 都归因,不盲目重试)
       const diagnosis = await diagnoseFailure(client, {
