@@ -3,11 +3,11 @@ import { join } from "node:path";
 
 import type { LlmClient } from "./llm.js";
 import { getProject, projectPath, saveProjectState, writeYaml } from "./project-store.js";
-import type { CapabilityNode, GraphWorkflowSpec, GraphRuntime } from "./types.js";
+import type { CapabilityNode, DeliverableContract, GraphWorkflowSpec, GraphRuntime } from "./types.js";
 import { validateGraphWorkflow } from "./workflow-validator.js";
 import { checkSufficiency } from "./sufficiency-checker.js";
 import { projectEvent, type EventBus } from "./events.js";
-import { getDefaultDeliverableContract } from "./artifacts.js";
+import { getProjectDeliverableContract } from "./artifacts.js";
 
 // 重导出图执行引擎
 export { runGraphProject, readGraphSpec, applyHumanVerdict } from "./graph-engine.js";
@@ -32,7 +32,7 @@ const COMPOSER_SYSTEM = `你是一个 workflow 规划者(Composer)。你的职�
       "kind": "light | agent",
       "desc": "这个节点做什么的自然语言描述",
       "agent": "角色名(agent节点必填,如writer/researcher)",
-      "outputs": [{"path": "solution/xxx.md", "desc": "产出说明"}],
+      "outputs": [{"path": "solution/xxx.md", "desc": "产出说明", "role": "evidence | deliverable | intermediate", "materializable": true}],
       "checks": [{"method": "llm_rubric | file_exists", "desc": "验收描述", "target": "路径(file_exists时)"}],
       "updates": ["blackboard字段名(如果这个节点负责更新记忆)"]
     }
@@ -54,13 +54,13 @@ const COMPOSER_SYSTEM = `你是一个 workflow 规划者(Composer)。你的职�
 }
 
 规则:
-- 能力清单要覆盖目标的完整交付链(创作型:大纲→写→审→更新记忆→判断;调研型:查→析→审)
+- 能力清单要覆盖目标的完整交付链(创作型:大纲→写→审→更新记忆→判断;调研型:收集证据→沉淀结构化正文→审)
 - 轻节点(light):判断/转换/更新记忆,单次调用;重节点(agent):创作/调研/分析,自主完成一件事
 - 每个节点必须有 checks(无验收不执行)
 - bounded 的 blackboard 字段必须有节点负责 updates
 - guardrails.hard.max_iterations 必须有(安全阀)
 - creative/iterative 类任务(写多章/反复打磨)→ iterative=true,能力清单含循环潜力(同一节点可被多次调度)
-- research 类任务(一次性调研)→ iterative=false,能力清单线性
+- research 类任务(一次性调研)→ iterative=false,能力清单必须拆成至少两段: collect_evidence 收集事实/来源(raw evidence, role=evidence, materializable=false), write_structured_research 基于 evidence 写正式结构化报告(role=deliverable, materializable=true)
 - hard_constraints:从澄清信息中提取客观、可判定的约束(格式/数量/预算/合规/平台),这些将变成 checks 的种子
 - soft_guidance:从澄清信息中提取主观方向性偏好(风格/基调/取舍),这些只作引导不强制
 - 拿不准是硬还是软的,默认归 soft_guidance(宁可少锁不可锁错)
@@ -99,7 +99,7 @@ export async function planGraphWorkflow(
     // 推 LLM 输出给前端
     bus?.publish(projectEvent("plan_progress", projectId, { step: "llm_output", role: "composer", content: JSON.stringify(llmResult, null, 2).slice(0, 3000) }));
 
-    const spec = assembleSpec(projectId, goal, llmResult);
+    const spec = assembleSpec(projectId, goal, clarifications, llmResult);
     const validation = validateGraphWorkflow(spec);
     if (!validation.passed) {
       bus?.publish(projectEvent("plan_progress", projectId, { step: "hard_check_failed", attempt: attempt + 1, message: `硬校验未通过: ${validation.errors.join("; ")}` }));
@@ -128,7 +128,7 @@ export async function planGraphWorkflow(
   // 循环用尽,最后兜底:用最后一次的 spec(即使有 warning)落盘
   const userPrompt = buildComposerPrompt(goal, clarifications);
   const llmResult = await client.completeJson<ComposerLlmResult>("composer", COMPOSER_SYSTEM, userPrompt);
-  const spec = assembleSpec(projectId, goal, llmResult);
+  const spec = assembleSpec(projectId, goal, clarifications, llmResult);
   return composeGraphWorkflow(rootDir, projectId, client, spec);
 }
 
@@ -149,6 +149,7 @@ interface ComposerLlmResult {
   completion_criteria: string[];
   hard_constraints?: string[];
   soft_guidance?: string[];
+  deliverable_contract?: { required_sections?: string[]; forbidden_patterns?: string[]; notes?: string[] };
   agents: string[];
   required_capabilities: string[];
 }
@@ -167,9 +168,20 @@ function buildComposerPrompt(goal: string, clarifications: Array<{ q: string; a:
   return lines.join("\n");
 }
 
-function assembleSpec(projectId: string, rawGoal: string, r: ComposerLlmResult): GraphWorkflowSpec {
+function assembleSpec(projectId: string, rawGoal: string, clarifications: Array<{ q: string; a: string; risk: string }>, r: ComposerLlmResult): GraphWorkflowSpec {
   const deliverableType = r.deliverable_type ?? "research";
-  const deliverableContract = getDefaultDeliverableContract(deliverableType);
+  const deliverableContract = getProjectDeliverableContract({
+    goal: {
+      raw: rawGoal,
+      clarified: r.clarified || rawGoal,
+      deliverable_type: deliverableType,
+      iterative: r.iterative ?? false,
+      acceptance: r.acceptance ?? [],
+    },
+    clarifications,
+    hard_constraints: r.hard_constraints ?? [],
+    deliverable_contract: r.deliverable_contract as Partial<DeliverableContract> | undefined,
+  });
   const capabilities: CapabilityNode[] = (r.capabilities ?? []).map((c) => ({
     id: c.id,
     kind: c.kind === "agent" ? "agent" : "light",
@@ -177,10 +189,16 @@ function assembleSpec(projectId: string, rawGoal: string, r: ComposerLlmResult):
     agent: c.agent,
     skills: c.skills,
     inputs: c.inputs,
-    outputs: c.outputs,
+    outputs: c.outputs?.map((output) => ({
+      ...output,
+      role: output.role ?? "deliverable",
+      materializable: output.materializable ?? output.role !== "evidence",
+    })),
     checks: c.checks?.length ? c.checks : [{ method: "llm_rubric", desc: "产出满足要求" }],
     updates: c.updates,
   }));
+
+  const normalizedCapabilities = deliverableType === "research" ? ensureResearchEvidenceSplit(capabilities) : capabilities;
 
   return {
     version: "0.2",
@@ -194,13 +212,13 @@ function assembleSpec(projectId: string, rawGoal: string, r: ComposerLlmResult):
       iterative: r.iterative ?? false,
       acceptance: r.acceptance ?? [],
     },
-    clarifications: [],
+    clarifications: clarifications.map(c => ({ q: c.q, a: c.a })),
     required_capabilities: r.required_capabilities ?? ["web", "long_running"],
     selected_executor: "hermes",
-    agents: r.agents ?? [...new Set(capabilities.filter(c => c.agent).map(c => c.agent!))],
+    agents: r.agents ?? [...new Set(normalizedCapabilities.filter(c => c.agent).map(c => c.agent!))],
     skills: [],
     scripts: [],
-    capabilities,
+    capabilities: normalizedCapabilities,
     guardrails: {
       hard: { max_iterations: r.guardrails?.max_iterations ?? 20, max_retries_per_node: r.guardrails?.max_retries_per_node ?? 3 },
       soft: (r.guardrails?.soft ?? []).map(s => ({
@@ -213,7 +231,7 @@ function assembleSpec(projectId: string, rawGoal: string, r: ComposerLlmResult):
     blackboard_schema: {
       fields: r.blackboard_schema?.fields ?? [],
     },
-    entry_node: r.entry_node ?? capabilities[0]?.id ?? "",
+    entry_node: normalizedCapabilities.some((c) => c.id === "collect_evidence") ? "collect_evidence" : (normalizedCapabilities.some((c) => c.id === r.entry_node) ? r.entry_node : normalizedCapabilities[0]?.id ?? ""),
     completion_criteria: r.completion_criteria ?? [],
     hard_constraints: [
       ...((r as { hard_constraints?: string[] }).hard_constraints ?? []),
@@ -226,16 +244,54 @@ function assembleSpec(projectId: string, rawGoal: string, r: ComposerLlmResult):
   };
 }
 
+function ensureResearchEvidenceSplit(capabilities: CapabilityNode[]): CapabilityNode[] {
+  const hasEvidence = capabilities.some((cap) => (cap.outputs ?? []).some((output) => output.role === "evidence"));
+  const hasDeliverable = capabilities.some((cap) => (cap.outputs ?? []).some((output) => (output.role ?? "deliverable") === "deliverable"));
+  if (hasEvidence && hasDeliverable) return capabilities;
+
+  const originalInputs = capabilities[0]?.inputs ?? [{ ref: "blackboard", desc: "当前项目上下文" }];
+  const evidenceNode: CapabilityNode = {
+    id: "collect_evidence",
+    kind: "agent",
+    agent: "researcher",
+    desc: "收集事实、来源、页面信息和原始调研笔记;只沉淀证据,不写最终报告",
+    inputs: originalInputs,
+    outputs: [
+      { path: "solution/evidence/raw_research.md", desc: "原始调研证据和来源摘录", role: "evidence", materializable: false, min_bytes: 80, min_lines: 5 },
+    ],
+    checks: [{ method: "llm_rubric", desc: "证据包含事实、来源和可追溯引用,不是空泛过程日志" }],
+  };
+  const writerNode = capabilities.find((cap) => cap.kind === "agent") ?? capabilities[0];
+  const structuredNode: CapabilityNode = {
+    id: writerNode?.id === "collect_evidence" ? "write_structured_research" : (writerNode?.id ?? "write_structured_research"),
+    kind: "agent",
+    agent: writerNode?.agent ?? "writer",
+    desc: `${writerNode?.desc ?? "写结构化调研报告"};只能基于 evidence 输入沉淀正式结构化正文`,
+    inputs: [{ path: "solution/evidence/raw_research.md", desc: "原始调研证据" }],
+    outputs: (writerNode?.outputs?.length ? writerNode.outputs : [{ path: "solution/research_report.md", desc: "结构化调研报告" }]).map((output) => ({ ...output, role: "deliverable" as const, materializable: output.materializable ?? true })),
+    checks: writerNode?.checks?.length ? writerNode.checks : [{ method: "llm_rubric", desc: "结构化调研报告满足交付物结构契约" }],
+    updates: writerNode?.updates,
+  };
+  const rest = capabilities.filter((cap) => cap.id !== structuredNode.id && cap.id !== "collect_evidence");
+  return [evidenceNode, structuredNode, ...rest];
+}
+
 function withDeliverableContract(spec: GraphWorkflowSpec): GraphWorkflowSpec {
-  if (spec.deliverable_contract) return spec;
-  const deliverableContract = getDefaultDeliverableContract(spec.goal.deliverable_type);
-  return {
-    ...spec,
-    hard_constraints: [
+  const deliverableContract = getProjectDeliverableContract(spec);
+  const capabilities = spec.goal.deliverable_type === "research" ? ensureResearchEvidenceSplit(spec.capabilities) : spec.capabilities;
+  const hardConstraints = spec.deliverable_contract
+    ? spec.hard_constraints
+    : [
       ...(spec.hard_constraints ?? []),
       `交付物必须满足结构契约: ${deliverableContract.required_sections.join(" / ")}`,
       `交付物禁止出现过程自述模式: ${deliverableContract.forbidden_patterns.join(" / ")}`,
-    ],
+    ];
+  return {
+    ...spec,
+    capabilities,
+    agents: spec.agents.length > 0 ? spec.agents : [...new Set(capabilities.filter(c => c.agent).map(c => c.agent!))],
+    entry_node: capabilities.some((c) => c.id === "collect_evidence") ? "collect_evidence" : (capabilities.some((c) => c.id === spec.entry_node) ? spec.entry_node : capabilities[0]?.id ?? ""),
+    hard_constraints: hardConstraints,
     deliverable_contract: deliverableContract,
   };
 }

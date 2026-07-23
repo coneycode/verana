@@ -15,7 +15,8 @@ import { checkHardGuardrails, checkSoftGuardrails, shouldHumanCheckpoint, type G
 import { runScheduler, reviewCapabilityGap, type SchedulerDecision } from "./scheduler.js";
 import type { ExecutorAdapter } from "./executors.js";
 import { diagnoseFailure, type DiagnosisResult } from "./diagnostician.js";
-import { artifactFailureVerdict, collectArtifacts, getEffectiveDeliverableContract, renderArtifactForVerifier, renderDeliverableContract, validateArtifactContract } from "./artifacts.js";
+import { artifactFailureVerdict, collectArtifacts, getProjectDeliverableContract, renderArtifactForVerifier, renderDeliverableContract, validateArtifactContract } from "./artifacts.js";
+import { materializeArtifacts } from "./materializer.js";
 
 // 测试注入:设了就用 fake executor,不调 hermes CLI
 let injectedExecutor: ExecutorAdapter | null = null;
@@ -73,6 +74,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
   const dir = projectPath(rootDir, projectId);
   const solutionDir = join(dir, "solution");
   const spec = await readGraphSpec(rootDir, projectId);
+  const deliverableContract = getProjectDeliverableContract(spec);
   const startTime = Date.now();
   let totalTokens = 0;
 
@@ -217,15 +219,48 @@ export async function runGraphProject(rootDir: string, projectId: string, client
       verdict = await crossCheckLight(rootDir, projectId, runId, node, spec, wf.blackboard, client, bus, runResult);
     } else {
       const runDir = join(dir, "runs", runId);
-      const snapshot = await collectArtifacts({ projectDir: dir, runDir, runId, node });
+      let snapshot = await collectArtifacts({ projectDir: dir, runDir, runId, node });
       await appendEvent(solutionDir, { type: "artifact_collected", node: node.id, run_id: runId, data: { snapshot_dir: join("runs", runId, "artifacts"), outputs: snapshot.entries.map(e => e.declared_path) } });
-      const report = await validateArtifactContract({
+      let report = await validateArtifactContract({
         snapshot,
         node,
         projectDir: dir,
         deliverableType: spec.goal.deliverable_type,
-        deliverableContract: spec.deliverable_contract,
+        deliverableContract,
       });
+
+      if (!report.passed) {
+        const materialization = await materializeArtifacts({
+          client,
+          projectDir: dir,
+          runDir,
+          snapshot,
+          report,
+          node,
+          deliverableType: spec.goal.deliverable_type,
+          deliverableContract,
+          instruction,
+        });
+        await writeYaml(join(runDir, "materialization-report.yaml"), materialization);
+        await appendEvent(solutionDir, {
+          type: materialization.passed ? "artifact_materialized" : "artifact_materialization_failed",
+          node: node.id,
+          run_id: runId,
+          reason: materialization.passed ? `materialized: ${materialization.written.join(", ")}` : materialization.skipped_reason,
+          data: { report: join("runs", runId, "materialization-report.yaml"), written: materialization.written, targets: materialization.targets },
+        });
+        if (materialization.passed) {
+          snapshot = await collectArtifacts({ projectDir: dir, runDir, runId, node });
+          report = await validateArtifactContract({
+            snapshot,
+            node,
+            projectDir: dir,
+            deliverableType: spec.goal.deliverable_type,
+            deliverableContract,
+          });
+        }
+      }
+
       await writeYaml(join(runDir, "artifact-report.yaml"), report);
       await appendEvent(solutionDir, { type: report.passed ? "artifact_validated" : "artifact_failed", node: node.id, run_id: runId, data: { passed: report.passed, report: join("runs", runId, "artifact-report.yaml"), failure_codes: report.outputs.flatMap(o => o.failures.map(f => f.code)) } });
       if (!report.passed) {
@@ -312,7 +347,7 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     return alt ? [line, alt] : [line];
   }).join("\n");
 
-  const deliverableContract = getEffectiveDeliverableContract(spec.goal.deliverable_type, spec.deliverable_contract);
+  const deliverableContract = getProjectDeliverableContract(spec);
   const deliverableContractText = renderDeliverableContract(deliverableContract);
 
   // 软引导(主观方向,不强制)
@@ -435,7 +470,7 @@ async function verifyAgentNode(rootDir: string, projectId: string, runId: string
   const streamPath = join(runDir, "stream.md");
 
   const checkDescs = node.checks.map(c => `- [${c.method}] ${c.desc}${c.target ? ` (target: ${c.target})` : ""}`).join("\n");
-  const deliverableContractText = renderDeliverableContract(getEffectiveDeliverableContract(spec.goal.deliverable_type, spec.deliverable_contract));
+  const deliverableContractText = renderDeliverableContract(getProjectDeliverableContract(spec));
   const userPrompt = [
     `节点: ${node.id}`,
     `描述: ${node.desc}`,

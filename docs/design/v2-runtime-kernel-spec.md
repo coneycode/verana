@@ -165,18 +165,22 @@ summary:
 
 ### 3.1 CapabilityNode 输出契约
 
-当前 `CapabilityNode.outputs?: Array<{ path: string; desc: string }>` 需要升级为明确 artifact contract。
+当前 `CapabilityNode.outputs?: Array<{ path: string; desc: string }>` 需要升级为明确 artifact contract。输出还必须标注 role,区分 raw evidence 与正式 deliverable。
 
 建议类型:
 
 ```ts
 export type ArtifactKind = "file" | "directory";
 
+export type OutputRole = "evidence" | "deliverable" | "intermediate";
+
 export interface OutputContract {
   path: string;
   desc: string;
   kind?: ArtifactKind;             // 默认 file
+  role?: OutputRole;               // 默认 deliverable
   required?: boolean;              // 默认 true
+  materializable?: boolean;        // 默认 role !== evidence
   min_bytes?: number;              // 默认按节点类型/文件类型推断
   min_lines?: number;              // markdown/text 常用
   format?: "markdown" | "json" | "yaml" | "text" | "directory";
@@ -190,6 +194,12 @@ export interface CapabilityNode {
 ```
 
 第一版可以不一次性暴露所有字段给 Composer,但内部 validator 应按默认值补齐。
+
+role 语义:
+
+- `evidence`: 原始证据、来源摘录、浏览结果、事实笔记。允许不满足最终交付物章节模板,但不能为空、不能只有操作日志。默认 `materializable=false`。
+- `deliverable`: 正式交付物。必须满足 deliverable_type 结构契约。默认 `materializable=true`。
+- `intermediate`: 中间文件。按 output contract 做基础检查,通常不进入最终结构校验。
 
 ### 3.2 ArtifactSnapshot
 
@@ -519,37 +529,30 @@ artifact contract 解决的是“有没有真实物证”,但不同 deliverable_
 
 #### 6.0.2 Research 类型
 
+Research workflow 必须拆成两类能力节点:
+
+1. `collect_evidence`: 收集事实、来源、页面信息和原始调研笔记,输出 `role=evidence` 的 raw artifact,例如 `solution/evidence/raw_research.md`。该节点不负责最终正文结构。
+2. `write_structured_research`: 读取 evidence outputs,沉淀正式结构化正文,输出 `role=deliverable` 的 report,例如 `solution/research_report.md`。
+
+完成标准和最终 verifier 必须指向 `role=deliverable` 的结构化报告,不能把 raw evidence 当最终交付物。
+
 Research 交付物默认必须具备:
 
-- **按产品逐一列出**: 不允许只给总述,必须对每个产品/方案单独展开。
-- **评测 3 维**:
-  - 自动化测试
-  - 效果评估
-  - 评分体系
-- **可观测 5 维**:
-  - 链路追踪
-  - 日志
-  - 指标
-  - 告警
-  - Dashboard
+- **通用结构**: 至少有产品概览、主要发现、结论与建议等正式章节,避免把过程笔记当成正文。
+- **项目专属章节**: 如果当前项目的澄清/acceptance/hard_constraints 明确要求评测 3 维、可观测 5 维、功能矩阵或其他专题章节,这些要求应进入当前项目的 deliverable contract,而不是写死进 research 类型默认值。
+- **contract 来源**: 当前项目的 deliverable contract 由澄清结果 + acceptance + hard_constraints + deliverable_type 通用底线合成;通用 research 只保留产品概览/主要发现/结论与建议等底线结构。
 - **来源与证据**: 每个结论应能回到来源或证据片段。
-- **结论**: 必须给出对比结论、取舍和建议。
 - **禁止项**: 纯过程叙事、调研思维记录、只讲“我查了什么”但不落结论。
 
 建议结构:
 
 ```md
 ## 产品概览
-## 产品 A
-### 评测3维
-### 可观测5维
-### 来源/证据
-## 产品 B
-### 评测3维
-### 可观测5维
-### 来源/证据
+## 主要发现
 ## 结论与建议
 ```
+
+对于当前这类竞品研究,Composer 会根据 acceptance/hard_constraints 额外注入 `评测3维`、`可观测5维`、`功能矩阵` 等项目专属章节。
 
 #### 6.0.3 Creative 类型
 
@@ -698,8 +701,20 @@ await writeFile(outPath, deliverable, "utf8");
 
 ```ts
 const execResult = await executeNode(...);      // 写 stream.md + claim.md
-const snapshot = await collectArtifacts({ projectDir, runDir, runId, node });
-const report = await validateArtifactContract({ snapshot, node });
+let snapshot = await collectArtifacts({ projectDir, runDir, runId, node });
+let report = await validateArtifactContract({ snapshot, node });
+
+if (!report.passed && isMaterializableReport(report, node.outputs)) {
+  const materialization = await materializeArtifacts({ claim, stream, snapshot, report, contract });
+  await writeYaml(join(runDir, "materialization-report.yaml"), materialization);
+  append artifact_materialized / artifact_materialization_failed event;
+
+  if (materialization.passed) {
+    snapshot = await collectArtifacts({ projectDir, runDir, runId, node });
+    report = await validateArtifactContract({ snapshot, node });
+  }
+}
+
 await writeYaml(join(runDir, "artifact-report.yaml"), report);
 
 if (!report.passed) {
@@ -722,6 +737,15 @@ const verdict = await verifyAgentNode(..., artifactBody, snapshot, report);
 - 写 `claim.md`。
 - 不写 `deliverable.md`。
 - 不写 `node.outputs` fallback。
+
+`materializeArtifacts` 的职责:
+
+- 只在 artifact contract 失败后运行,且每个 run 最多一次。
+- 只处理 `role=deliverable` 且 `materializable !== false` 的 outputs。
+- 可修复 missing / empty / too small / claim-like / stream-like / process-log-like / structure-invalid artifacts。
+- 输入包括 claim、stream、坏 artifact snapshot、node inputs 和 deliverable contract。
+- 输出必须写回声明 output path,然后重新 collect + validate。
+- 不得编造输入证据中没有的事实;证据不足时必须失败而不是硬写正文。
 
 `verifyAgentNode` 的职责改为:
 

@@ -306,17 +306,18 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
       reply.raw.end();
       return;
     }
-    reply.raw.write(`event: snapshot\ndata: ${JSON.stringify(snapshotData)}\n\n`);
+    // unnamed SSE: 只发 data 行,type 在 JSON payload 里,前端用 onmessage 统一接收
+    reply.raw.write(`data: ${JSON.stringify({ type: "snapshot", project_id: request.params.id, at: new Date().toISOString(), payload: snapshotData })}\n\n`);
     if (request.query.once === "1") {
       reply.raw.end();
       return;
     }
     const unsubscribe = bus.subscribe(request.params.id, (event) => {
-      reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
     });
     // 也订阅通配事件(LLM 状态等全局事件)
     const unsubscribeAll = bus.subscribe("*", (event) => {
-      reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
     });
     request.raw.on("close", () => { unsubscribe(); unsubscribeAll(); });
   });

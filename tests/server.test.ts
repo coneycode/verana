@@ -50,7 +50,7 @@ function makeResearchSpec(pid: string): GraphWorkflowSpec {
     capabilities: [
       { id: "write_chapter", kind: "agent", desc: "写结构化调研报告", outputs: [{ path: "solution/report.md", desc: "调研报告", min_bytes: 40, min_lines: 3 }], checks: [{ method: "llm_rubric", desc: "结构完整" }] },
     ],
-    guardrails: { hard: { max_iterations: 1, max_retries_per_node: 1 }, soft: [], human_checkpoint_every: 0 },
+    guardrails: { hard: { max_iterations: 10, max_retries_per_node: 1 }, soft: [], human_checkpoint_every: 0 },
     blackboard_schema: { fields: [{ key: "summary", desc: "摘要", bounded: false }] },
     entry_node: "write_chapter",
     completion_criteria: ["报告通过验证"],
@@ -110,7 +110,7 @@ test("graph workflow: create → plan → approve → run → final_review", asy
   }
 });
 
-test("graph workflow records artifact contract failure when runtime deliverable structure is invalid", async () => {
+test("graph workflow materializes invalid runtime deliverable before final validation", async () => {
   setExecutorForTest(new BadResearchExecutorAdapter());
   const root = await mkdtemp(join(tmpdir(), "verana-srv-artifact-"));
   const client = buildSmartFakeClient();
@@ -130,19 +130,24 @@ test("graph workflow records artifact contract failure when runtime deliverable 
 
     const runResponse = await app.inject({ method: "POST", url: `/projects/${pid}/run` });
     assert.equal(runResponse.statusCode, 200);
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 1200));
 
     const stateResponse = await app.inject({ method: "GET", url: `/projects/${pid}` });
     const wf = stateResponse.json().status.workflows.solution;
-    assert.equal(wf.workflow_status, "awaiting_human");
-    assert.match(wf.awaiting_reason, /F_artifact_contract_failure|缺少|missing|结构|禁止|forbidden/);
+    assert.notEqual(wf.workflow_status, "awaiting_human");
+
+    const materializationRaw = await readFile(join(root, "projects", pid, "runs", "run-0001", "materialization-report.yaml"), "utf8");
+    assert.match(materializationRaw, /attempted: true/);
+    assert.match(materializationRaw, /passed: true/);
+    assert.match(materializationRaw, /solution\/report.md/);
 
     const reportRaw = await readFile(join(root, "projects", pid, "runs", "run-0001", "artifact-report.yaml"), "utf8");
-    assert.match(reportRaw, /deliverable_structure_missing_section/);
-    assert.match(reportRaw, /deliverable_structure_forbidden_pattern/);
+    assert.match(reportRaw, /passed: true/);
+    assert.doesNotMatch(reportRaw, /deliverable_structure_missing_section/);
 
     const verdictRaw = await readFile(join(root, "projects", pid, "runs", "run-0001", "verdict.yaml"), "utf8");
-    assert.match(verdictRaw, /F_artifact_contract_failure/);
+    assert.match(verdictRaw, /artifact_report: runs\/run-0001\/artifact-report\.yaml/);
+    assert.doesNotMatch(verdictRaw, /F_artifact_contract_failure/);
   } finally {
     setExecutorForTest(null);
     await app.close();

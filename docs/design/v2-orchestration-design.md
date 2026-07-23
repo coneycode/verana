@@ -68,8 +68,9 @@
 
 每个角色只做一件事,数据单向流经闭环:
 - **executor**:只干活,产出 claim 与声明输出的磁盘产物。claim 只是证词,不是交付物。
-- **artifact_collector**(运行时内核职责):收集节点声明的 outputs,冻结 artifact snapshot,做机械契约检查。它不是 LLM 角色,而是 scaffold 的事实层。
-- **规整层**(轻 LLM):设计上用于 claim → deliverable 的轻清洗;后续主路径应改成基于 artifact snapshot 的规范化,规整层保留为兼容层,不再直接把 claim 当 deliverable 真相。
+- **artifact_collector**(运行时内核职责):收集节点声明的 outputs,冻结 artifact snapshot,做机械契约检查。它不是 LLM 角色,而是 scaffold 的事实层。Research 类 workflow 中 outputs 必须区分 `role=evidence` 与 `role=deliverable`; evidence 只做事实留痕,不套最终正文结构。
+- **materializer**(轻 LLM,运行时兜底):当 declared deliverable 缺失、像 stream/log、缺结构时,基于 claim/stream/坏 artifact/evidence inputs 自动沉淀一次正式 artifact,写回声明 output 后重新冻结与校验。它不是把 claim 直接当真相,而是显式生成 materialization-report 并保留来源约束。
+- **project deliverable contract**:由当前项目的澄清、acceptance、hard_constraints 生成,通用 research 只提供底线结构(如产品概览/主要发现/结论与建议),具体的 `评测3维` / `可观测5维` / `功能矩阵` 等要求必须来自当前项目,不能固化为全局默认。
 - **verifier**:只判对错。判冻结后的 artifact(非 claim),输出 verdict{passed, reasons}。
   不归因、不决定下一步。claim 保留供归因用。
 - **diagnostician**(归因者,全新角色):只归因。拿 verdict fail + claim + artifact +
@@ -128,6 +129,7 @@ buildProgressTruth(带 verdict 的轨迹摘要)
   → executor 执行 → claim + 对工作区的文件写入
   → artifact_collector 从 node.outputs 收集磁盘产物并冻结 snapshot
   → artifact_validator 做机械契约检查(存在/非空/形态/非过程日志/非自述)
+  → 如 deliverable artifact 可修复且 evidence 足够,materializer 一次性沉淀正式 artifact → 重新冻结/校验
   → verifier 判 artifact snapshot 语义质量 → verdict
   → pass: blackboard 更新 → 下一轮
   → fail: diagnostician 归因 → 根因写进度真相 → scheduler 路由到对症修复 → 闭环

@@ -503,6 +503,23 @@ function renderTimelineBlocks(containerId) {
       if (b.llmOutput) {
         html += '<div class="tl-llm" style="background:#050b17;border-radius:6px;padding:8px;margin-bottom:6px;max-height:300px;overflow:auto;font-size:13px;white-space:pre-wrap;word-break:break-word;color:#dbeafe">'+escapeHtml(b.llmOutput)+'</div>';
       }
+      if (b.artifactCollected) {
+        html += '<div style="color:#64748b;font-size:13px;margin-bottom:4px">📦 产物收集完成</div>';
+      }
+      if (b.artifactValidated === false) {
+        const codes = b.artifactFailures?.length ? ' ('+b.artifactFailures.join(', ')+')' : '';
+        html += '<div style="color:#ef4444;font-size:13px;margin-bottom:4px">⚠️ 产物契约失败'+escapeHtml(codes)+'</div>';
+      } else if (b.artifactValidated === true) {
+        html += '<div style="color:#22c55e;font-size:13px;margin-bottom:4px">✅ 产物契约通过</div>';
+      }
+      if (b.materialized) {
+        const paths = b.materializedPaths?.length ? ' — '+escapeHtml(b.materializedPaths.join(', ')) : '';
+        html += '<div style="color:#f59e0b;font-size:13px;margin-bottom:4px">🔧 兜底修复: materializer 已生成正式产物'+paths+'</div>';
+      }
+      if (b.materializationFailed) {
+        const reason = b.materializationReason ? ' — '+escapeHtml(b.materializationReason) : '';
+        html += '<div style="color:#ef4444;font-size:13px;margin-bottom:4px">🔧 兜底修复失败'+reason+'</div>';
+      }
       if (b.verdict) {
         const pass = b.verdict.passed;
         html += '<div style="color:'+(pass?'#22c55e':'#ef4444')+';font-size:13px;margin-bottom:4px">'+(pass?'✅':'❌')+' 验证: '+(pass?'通过':'未通过')+(b.verdict.reasons?.length?' — '+escapeHtml(b.verdict.reasons[0].slice(0,80)):'')+'</div>';
@@ -548,6 +565,21 @@ function rebuildTimelineFromEvents(events) {
       // 只更新已有 block 的 runId
       const running = [...timelineBlocks].reverse().find(b => b.nodeId === e.node && b.status === 'running');
       if (running && e.run_id) running.runId = e.run_id;
+    } else if (e.type === 'artifact_collected') {
+      const running = [...timelineBlocks].reverse().find(b => b.nodeId === e.node && b.status === 'running');
+      if (running) running.artifactCollected = true;
+    } else if (e.type === 'artifact_validated') {
+      const running = [...timelineBlocks].reverse().find(b => b.nodeId === e.node && b.status === 'running');
+      if (running) running.artifactValidated = e.data?.passed ?? true;
+    } else if (e.type === 'artifact_failed') {
+      const running = [...timelineBlocks].reverse().find(b => b.nodeId === e.node && b.status === 'running');
+      if (running) { running.artifactValidated = false; running.artifactFailures = e.data?.failure_codes || []; }
+    } else if (e.type === 'artifact_materialized') {
+      const target = [...timelineBlocks].reverse().find(b => b.nodeId === e.node && (b.status === 'running' || b.status === 'failed'));
+      if (target) { target.materialized = true; target.materializedPaths = e.data?.written || []; }
+    } else if (e.type === 'artifact_materialization_failed') {
+      const target = [...timelineBlocks].reverse().find(b => b.nodeId === e.node && (b.status === 'running' || b.status === 'failed'));
+      if (target) { target.materializationFailed = true; target.materializationReason = e.reason || ''; }
     } else if (e.type === 'verdict') {
       const running = [...timelineBlocks].reverse().find(b => b.status === 'running');
       if (running) {
@@ -567,6 +599,7 @@ function rebuildTimelineFromEvents(events) {
 
 /** SSE 事件 → 更新 timelineBlocks */
 function updateBlockFromSSE(eventType, payload) {
+  const running = timelineBlocks.find(b => b.status === 'running');
   if (eventType === 'node_selected') {
     // 新节点开始或重试
     const nodeId = payload.node || '';
@@ -583,13 +616,24 @@ function updateBlockFromSSE(eventType, payload) {
     timelineBlocks.push({ nodeId, desc, runId, status: 'running', reason: payload.reason || '', llmOutput: '', _expanded: false });
   } else if (eventType === 'llm_stream') {
     // LLM 输出追加到正在执行的 block
-    const running = timelineBlocks.find(b => b.status === 'running');
-    if (running) {
-      if (payload.delta) running.llmOutput += payload.delta;
-      else if (payload.message) running.llmOutput += (running.llmOutput ? String.fromCharCode(10) : '') + payload.message;
+    const r = running || timelineBlocks[timelineBlocks.length - 1];
+    if (r) {
+      if (payload.delta) r.llmOutput += payload.delta;
+      else if (payload.message) r.llmOutput += (r.llmOutput ? String.fromCharCode(10) : '') + payload.message;
     }
+  } else if (eventType === 'artifact_collected') {
+    if (running) running.artifactCollected = true;
+  } else if (eventType === 'artifact_validated') {
+    if (running) running.artifactValidated = payload.passed ?? true;
+  } else if (eventType === 'artifact_failed') {
+    if (running) { running.artifactValidated = false; running.artifactFailures = payload.failure_codes || []; }
+  } else if (eventType === 'artifact_materialized') {
+    const target = running || [...timelineBlocks].reverse().find(b => b.status === 'failed');
+    if (target) { target.materialized = true; target.materializedPaths = payload.written || []; }
+  } else if (eventType === 'artifact_materialization_failed') {
+    const target = running || [...timelineBlocks].reverse().find(b => b.status === 'failed');
+    if (target) { target.materializationFailed = true; target.materializationReason = payload.reason || ''; }
   } else if (eventType === 'verdict') {
-    const running = timelineBlocks.find(b => b.status === 'running');
     if (running) {
       running.verdict = payload.verdict;
       running.status = payload.verdict?.passed ? 'passed' : 'failed';
@@ -598,7 +642,6 @@ function updateBlockFromSSE(eventType, payload) {
     const lastFailed = [...timelineBlocks].reverse().find(b => b.status === 'failed');
     if (lastFailed) lastFailed.diagnosis = payload.diagnosis;
   } else if (eventType === 'human_required') {
-    const running = timelineBlocks.find(b => b.status === 'running');
     if (running) running.status = 'failed';
   }
   // 只在 executing 阶段重绘
@@ -937,106 +980,85 @@ function connectEvents() {
   $('connection').textContent = 'SSE: connecting';
   source.onopen = () => $('connection').textContent = 'SSE: connected';
   source.onerror = () => $('connection').textContent = 'SSE: disconnected';
-  ['snapshot','project_created','plan_composed','plan_progress','gate_approved','gate_rejected','run_completed','run_failed','input_recorded','status_changed','blackboard_updated','human_required','human_verdict','verdict','scheduler_decision'].forEach(type => source.addEventListener(type, () => { refresh(); }));
-  source.addEventListener('llm_status', (event) => {
-    const data = JSON.parse(event.data);
-    const s = data.payload || {};
-    const el = document.getElementById('llmStatusBar');
-    if (s.phase === 'calling') {
-      if (el) { el.style.display = 'flex'; el.querySelector('.llm-status-text').textContent = s.description; }
-    } else if (s.phase === 'done' || s.phase === 'error') {
-      if (el) { el.style.display = 'none'; }
+  // 统一 SSE 接收:后端发 unnamed event,所有事件走同一通道,按 data.type 分发
+  source.onmessage = (event) => {
+    let data;
+    try { data = JSON.parse(event.data); } catch { return; }
+    const type = data.type;
+    const payload = data.payload || {};
+    if (type === 'snapshot') return;
+    if (type === 'llm_status') {
+      const s = payload || {};
+      const el = document.getElementById('llmStatusBar');
+      if (s.phase === 'calling') {
+        if (el) { el.style.display = 'flex'; el.querySelector('.llm-status-text').textContent = s.description; }
+      } else if (s.phase === 'done' || s.phase === 'error') {
+        if (el) { el.style.display = 'none'; }
+      }
+      return;
     }
-  });
-  source.addEventListener('project_deleted', (event) => {
-    const data = JSON.parse(event.data);
-    const deletedId = data.payload?.projectId || data.project_id;
-    if (deletedId === selectedId) {
-      selectedId = null; state = null; workflowSpec = null; timelineBlocks = [];
-      history.replaceState(null, '', '#');
-      $('detail').style.display = 'none';
-      $('empty').style.display = 'block';
+    if (type === 'project_deleted') {
+      const deletedId = payload.projectId || data.project_id;
+      if (deletedId === selectedId) {
+        selectedId = null; state = null; workflowSpec = null; timelineBlocks = [];
+        history.replaceState(null, '', '#');
+        $('detail').style.display = 'none';
+        $('empty').style.display = 'block';
+      }
+      loadProjects();
+      return;
     }
-    loadProjects();
-  });
-  source.addEventListener('plan_progress', (event) => {
-    const data = JSON.parse(event.data);
-    const p = data.payload || {};
-    if (p.message) setPlanProgress(p.message);
-    if (p.step) planBlocks.push({ step: p.step, message: p.message || '', content: p.content || '' });
-    // 不调 refresh(避免 composing 阶段重建丢失 planBlocks),直接重渲染 composing
-    const phase = typeof getPhase === 'function' ? getPhase() : '';
-    if (phase === 'composing') {
-      const el = document.getElementById('mainArea');
-      if (el) {
-        let html = '<div class="guide"><div class="guide-title">规划中</div><div class="guide-desc" id="planProgressMsg">' + escapeHtml(planProgress) + '</div></div>';
-        if (planBlocks.length > 0) {
-          html += '<div style="margin-top:12px">';
-          for (const b of planBlocks) {
-            const isInput = b.step === 'llm_input';
-            const isOutput = b.step === 'llm_output';
-            const isResult = b.step === 'sufficiency_result';
-            const color = isInput ? '#3b82f6' : isOutput ? '#22c55e' : isResult ? '#a78bfa' : '#64748b';
-            const label = b.step === 'composing' ? 'Composer 生成' :
-                          b.step === 'llm_input' ? 'LLM 输入' :
-                          b.step === 'llm_output' ? 'LLM 输出' :
-                          b.step === 'sufficiency_check' ? '充分性检查' :
-                          b.step === 'sufficiency_result' ? '检查结果' :
-                          b.step === 'sufficiency_failed' ? '检查未通过' :
-                          b.step === 'hard_check_failed' ? '硬校验未通过' :
-                          b.step === 'done' ? '规划完成' : b.step;
-            html += '<div style="border:1px solid ' + color + ';border-radius:6px;margin-bottom:6px;overflow:hidden">';
-            html += '<div style="padding:6px 10px;background:#0d1626;cursor:pointer;color:' + color + ';font-size:13px;font-weight:bold" onclick="var body=this.parentElement.querySelector(\'.pb-body\');body.style.display=body.style.display===\'none\'?\'block\':\'none\'">' + escapeHtml(label) + '</div>';
-            if (b.content) {
-              html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;white-space:pre-wrap;word-break:break-word;color:#dbeafe;max-height:400px;overflow:auto;background:#050b17">' + escapeHtml(b.content) + '</div>';
-            } else if (b.message) {
-              html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;color:#dbeafe">' + escapeHtml(b.message) + '</div>';
-            } else {
-              html += '<div class="pb-body" style="display:none;padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;color:#64748b">(无内容)</div>';
+    if (type === 'plan_progress') {
+      if (payload.message) setPlanProgress(payload.message);
+      if (payload.step) planBlocks.push({ step: payload.step, message: payload.message || '', content: payload.content || '' });
+      const phase = typeof getPhase === 'function' ? getPhase() : '';
+      if (phase === 'composing') {
+        const el = document.getElementById('mainArea');
+        if (el) {
+          let html = '<div class="guide"><div class="guide-title">规划中</div><div class="guide-desc" id="planProgressMsg">' + escapeHtml(planProgress) + '</div></div>';
+          if (planBlocks.length > 0) {
+            html += '<div style="margin-top:12px">';
+            for (const b of planBlocks) {
+              const isInput = b.step === 'llm_input';
+              const isOutput = b.step === 'llm_output';
+              const isResult = b.step === 'sufficiency_result';
+              const color = isInput ? '#3b82f6' : isOutput ? '#22c55e' : isResult ? '#a78bfa' : '#64748b';
+              const label = b.step === 'composing' ? 'Composer 生成' :
+                            b.step === 'llm_input' ? 'LLM 输入' :
+                            b.step === 'llm_output' ? 'LLM 输出' :
+                            b.step === 'sufficiency_check' ? '充分性检查' :
+                            b.step === 'sufficiency_result' ? '检查结果' :
+                            b.step === 'sufficiency_failed' ? '检查未通过' :
+                            b.step === 'hard_check_failed' ? '硬校验未通过' :
+                            b.step === 'done' ? '规划完成' : b.step;
+              html += '<div style="border:1px solid ' + color + ';border-radius:6px;margin-bottom:6px;overflow:hidden">';
+              html += '<div style="padding:6px 10px;background:#0d1626;cursor:pointer;color:' + color + ';font-size:13px;font-weight:bold" onclick="var body=this.parentElement.querySelector(\'.pb-body\');body.style.display=body.style.display===\'none\'?\'block\':\'none\'">' + escapeHtml(label) + '</div>';
+              if (b.content) {
+                html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;white-space:pre-wrap;word-break:break-word;color:#dbeafe;max-height:400px;overflow:auto;background:#050b17">' + escapeHtml(b.content) + '</div>';
+              } else if (b.message) {
+                html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;color:#dbeafe">' + escapeHtml(b.message) + '</div>';
+              } else {
+                html += '<div class="pb-body" style="display:none;padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;color:#64748b">(无内容)</div>';
+              }
+              html += '</div>';
             }
             html += '</div>';
           }
-          html += '</div>';
+          el.innerHTML = html;
         }
-        el.innerHTML = html;
       }
+      return;
     }
-  });  // 全流程步骤事件 → liveFeed
-  source.addEventListener('node_selected', (event) => {
-    const data = JSON.parse(event.data);
-    const p = data.payload || {};
-    updateBlockFromSSE('node_selected', p);
-    refresh();
-  });
-  source.addEventListener('verdict', (event) => {
-    const data = JSON.parse(event.data);
-    const p = data.payload || {};
-    updateBlockFromSSE('verdict', p);
-    refresh();
-  });
-  source.addEventListener('blackboard_updated', (event) => {
-    refresh();
-  });
-  source.addEventListener('human_required', (event) => {
-    const data = JSON.parse(event.data);
-    const p = data.payload || {};
-    updateBlockFromSSE('human_required', p);
-    refresh();
-  });
-  source.addEventListener('diagnosis', (event) => {
-    const data = JSON.parse(event.data);
-    const p = data.payload || {};
-    updateBlockFromSSE('diagnosis', p);
-    refresh();
-  });
-  // LLM 流式 delta → 更新当前 block
-  source.addEventListener('llm_stream', (event) => {
-    const data = JSON.parse(event.data);
-    const payload = data.payload || {};
-    if (payload.delta || payload.message) {
-      updateBlockFromSSE('llm_stream', payload);
+    if (type === 'llm_stream') {
+      if (payload.delta || payload.message) {
+        updateBlockFromSSE('llm_stream', payload);
+      }
+      return;
     }
-  });
+    // 执行阶段事件:更新 timeline block + refresh
+    updateBlockFromSSE(type, payload);
+    refresh();
+  };
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }

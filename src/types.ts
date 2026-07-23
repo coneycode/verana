@@ -28,11 +28,15 @@ export type ArtifactKind = "file" | "directory";
 export type ArtifactFormat = "markdown" | "json" | "yaml" | "text" | "directory";
 export type ArtifactLookalike = "claim" | "stream" | "process_log" | "metadata_only";
 
+export type OutputRole = "evidence" | "deliverable" | "intermediate";
+
 export interface OutputContract {
   path: string;
   desc: string;
   kind?: ArtifactKind;
+  role?: OutputRole;
   required?: boolean;
+  materializable?: boolean;
   min_bytes?: number;
   min_lines?: number;
   format?: ArtifactFormat;
@@ -125,6 +129,7 @@ export interface EventEntry {
     | "blackboard_updated" | "guardrail_hit" | "human_required"
     | "scheduler_decision" | "capability_added" | "run_created"
     | "artifact_collected" | "artifact_validated" | "artifact_failed"
+    | "artifact_materialized" | "artifact_materialization_failed"
     | "llm_stream" | "diagnosis";
   node?: string;
   run_id?: string;

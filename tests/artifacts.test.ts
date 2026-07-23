@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { artifactFailureVerdict, collectArtifacts, renderArtifactForVerifier, validateArtifactContract, validateDeliverableStructure } from "../src/artifacts.js";
+import { artifactFailureVerdict, collectArtifacts, getProjectDeliverableContract, renderArtifactForVerifier, validateArtifactContract, validateDeliverableStructure } from "../src/artifacts.js";
 import type { CapabilityNode } from "../src/types.js";
 import { validateGraphWorkflow } from "../src/workflow-validator.js";
 
@@ -50,11 +50,31 @@ test("artifact collector freezes declared output snapshot", async () => {
   assert.doesNotMatch(frozen, /mutated/);
 });
 
-test("deliverable structure validator enforces type-specific sections", () => {
+test("deliverable structure validator keeps generic research defaults separate from project-specific contracts", () => {
   const badResearch = "# 调研笔记\n\n## 产品概览\n\n让我先看一下资料。";
   const researchFailures = validateDeliverableStructure(badResearch, "research");
   assert.equal(researchFailures.some((f) => f.code === "deliverable_structure_missing_section"), true);
-  assert.equal(researchFailures.some((f) => f.code === "deliverable_structure_forbidden_pattern"), true);
+  assert.equal(researchFailures.some((f) => f.message.includes("主要发现")), true);
+
+  const projectContract = getProjectDeliverableContract({
+    goal: {
+      raw: "竞品对比",
+      clarified: "竞品对比",
+      deliverable_type: "research",
+      iterative: false,
+      acceptance: [
+        "评测能力包含自动化测试、效果评估、评分体系",
+        "可观测能力包含链路追踪、日志、指标监控、告警、流量回放",
+        "包含功能有无/支持程度的结构化功能矩阵表格",
+      ],
+    },
+    clarifications: [],
+    hard_constraints: ["必须客观呈现各产品能力现状"],
+    deliverable_contract: undefined,
+  });
+  assert.equal(projectContract.required_sections.includes("评测3维"), true);
+  assert.equal(projectContract.required_sections.includes("可观测5维"), true);
+  assert.equal(projectContract.required_sections.includes("功能矩阵"), true);
 
   const creativeFailures = validateDeliverableStructure("# 小说章节\n\n## 正文\n\n夜色压下来,街角的灯忽明忽暗。", "creative");
   assert.equal(creativeFailures.length, 0);
@@ -86,17 +106,36 @@ test("artifact validator validates and renders directory deliverable contents", 
     outputs: [{ path: "solution/research/", desc: "调研目录", min_bytes: 80, min_lines: 5 }],
   };
   await mkdir(join(projectDir, "solution", "research"), { recursive: true });
-  await writeFile(join(projectDir, "solution", "research", "report.md"), "# 调研报告\n\n## 产品概览\n\n这是正式正文。\n\n## 评测3维\n\n自动化测试、效果评估、评分体系。\n\n## 可观测5维\n\n链路追踪、日志、指标、告警、Dashboard。\n\n## 结论与建议\n\n继续推进。\n", "utf8");
+  await writeFile(join(projectDir, "solution", "research", "report.md"), "# 调研报告\n\n## 产品概览\n\n这是正式正文。\n\n## 主要发现\n\n这里总结关键观察。\n\n- 观察一\n- 观察二\n- 观察三\n\n## 评测3维\n\n自动化测试、效果评估、评分体系。\n\n## 可观测5维\n\n链路追踪、日志、指标、告警、Dashboard。\n\n## 结论与建议\n\n继续推进。\n", "utf8");
 
   const snapshot = await collectArtifacts({ projectDir, runDir, runId: "run-0001", node: dirNode });
   const report = await validateArtifactContract({ snapshot, node: dirNode, projectDir, deliverableType: "research" });
   assert.equal(report.passed, true);
-  assert.equal(report.outputs[0].line_count! >= 5, true);
+  assert.equal(report.outputs[0].status, "passed");
 
   const rendered = await renderArtifactForVerifier(snapshot);
   assert.match(rendered, /## 产品概览/);
   assert.match(rendered, /## 评测3维/);
   assert.doesNotMatch(rendered, /directory snapshot:/);
+});
+
+test("artifact validator does not apply final deliverable structure to evidence outputs", async () => {
+  const projectDir = await mkdtemp(join(tmpdir(), "verana-artifact-"));
+  const runDir = join(projectDir, "runs", "run-0001");
+  const evidenceNode: CapabilityNode = {
+    ...agentNode,
+    outputs: [{ path: "solution/evidence/raw_findings.md", desc: "原始证据", role: "evidence", materializable: false, min_bytes: 40, min_lines: 3 }],
+  };
+  await mkdir(join(projectDir, "solution", "evidence"), { recursive: true });
+  await writeFile(join(projectDir, "solution", "evidence", "raw_findings.md"), `产品A: 支持自动化测试。
+来源: https://example.com/a
+产品B: 仅有日志。
+`, "utf8");
+
+  const snapshot = await collectArtifacts({ projectDir, runDir, runId: "run-0001", node: evidenceNode });
+  const report = await validateArtifactContract({ snapshot, node: evidenceNode, projectDir, deliverableType: "research" });
+  assert.equal(report.passed, true);
+  assert.equal(report.outputs.some((o) => o.failures.some((f) => f.code === "deliverable_structure_missing_section")), false);
 });
 
 test("artifact validator rejects directory outputs without readable deliverables", async () => {

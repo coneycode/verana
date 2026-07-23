@@ -3,7 +3,7 @@ import { cp, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises"
 import { dirname, isAbsolute, join, normalize, relative } from "node:path";
 import { parse as parseYaml } from "yaml";
 
-import type { CapabilityNode, DeliverableContract, DeliverableType, OutputContract, VerdictRecord } from "./types.js";
+import type { CapabilityNode, DeliverableContract, DeliverableType, GraphWorkflowSpec, OutputContract, VerdictRecord } from "./types.js";
 
 export type ArtifactFailureCode =
   | "outputs_missing"
@@ -78,7 +78,7 @@ const STREAM_MARKERS = ["Hermes Agent 输出", "LLM 输出", "执行中", "tool"
 
 const DELIVERABLE_TEMPLATES: Record<DeliverableType, DeliverableContract> = {
   research: {
-    required_sections: ["产品概览", "评测3维", "可观测5维", "结论与建议"],
+    required_sections: ["产品概览", "主要发现", "结论与建议"],
     forbidden_patterns: ["思维记录", "调研过程", "我查了", "我看了", "我分析了", "让我先", "接下来我将"],
   },
   creative: {
@@ -115,12 +115,49 @@ export function renderDeliverableContract(contract: DeliverableContract): string
   return lines.join("\n");
 }
 
-export function getEffectiveDeliverableContract(deliverableType: DeliverableType, contractOverride?: DeliverableContract): DeliverableContract {
+export function getEffectiveDeliverableContract(deliverableType: DeliverableType, contractOverride?: Partial<DeliverableContract>): DeliverableContract {
   const base = getDefaultDeliverableContract(deliverableType);
   return {
     required_sections: contractOverride?.required_sections?.length ? [...contractOverride.required_sections] : base.required_sections,
     forbidden_patterns: contractOverride?.forbidden_patterns?.length ? [...contractOverride.forbidden_patterns] : base.forbidden_patterns,
     notes: contractOverride?.notes?.length ? [...contractOverride.notes] : base.notes,
+  };
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
+}
+
+function containsAny(source: string, terms: string[]): boolean {
+  return terms.some((term) => source.includes(term));
+}
+
+function deriveResearchSections(source: string): string[] {
+  const sections: string[] = [];
+  if (containsAny(source, ["功能矩阵", "矩阵对比", "对比表格", "表格对比"])) sections.push("功能矩阵");
+  if (containsAny(source, ["评测能力", "自动化测试", "效果评估", "评分体系"])) sections.push("评测3维");
+  if (containsAny(source, ["可观测能力", "链路追踪", "日志", "指标监控", "告警", "流量回放", "Dashboard"])) sections.push("可观测5维");
+  if (containsAny(source, ["优劣势", "定性描述", "分析对比", "差异分析"])) sections.push("优劣势分析");
+  return sections;
+}
+
+export function getProjectDeliverableContract(spec: Pick<GraphWorkflowSpec, "goal" | "clarifications" | "hard_constraints"> & { deliverable_contract?: Partial<DeliverableContract> }): DeliverableContract {
+  const base = getDefaultDeliverableContract(spec.goal.deliverable_type);
+  const projectSource = [
+    spec.goal.raw,
+    spec.goal.clarified,
+    ...spec.goal.acceptance,
+    ...(spec.hard_constraints ?? []),
+    ...(spec.clarifications ?? []).map((item) => `${item.q}\n${item.a}`),
+  ].join("\n");
+  const projectRequired = spec.goal.deliverable_type === "research" ? deriveResearchSections(projectSource) : [];
+  const override = spec.deliverable_contract;
+  const notes = uniqueStrings([...(base.notes ?? []), ...(override?.notes ?? [])]);
+
+  return {
+    required_sections: uniqueStrings([...base.required_sections, ...projectRequired, ...(override?.required_sections ?? [])]),
+    forbidden_patterns: uniqueStrings([...base.forbidden_patterns, ...(override?.forbidden_patterns ?? [])]),
+    notes: notes.length > 0 ? notes : undefined,
   };
 }
 
@@ -162,7 +199,9 @@ export function normalizeOutputContracts(node: CapabilityNode): OutputContract[]
     return {
       ...output,
       kind,
+      role: output.role ?? "deliverable",
       required: output.required ?? true,
+      materializable: output.materializable ?? output.role !== "evidence",
       min_bytes: output.min_bytes ?? (kind === "directory" ? 1 : 200),
       min_lines: output.min_lines ?? (inferredFormat === "json" || inferredFormat === "yaml" || kind === "directory" ? 0 : 5),
       format: inferredFormat,
@@ -309,7 +348,7 @@ export async function validateArtifactContract(args: {
         failures.push({ code: "declared_output_too_small", message: `declared output directory content has too few lines: ${contract.path} (${lineCount} lines < ${contract.min_lines})` });
       }
       failures.push(...validateLookalikes(contract, text));
-      if (args.deliverableType && text.trim()) {
+      if ((contract.role ?? "deliverable") === "deliverable" && args.deliverableType && text.trim()) {
         failures.push(...validateDeliverableStructure(text, args.deliverableType, args.deliverableContract));
       }
       outputs.push({
@@ -338,7 +377,7 @@ export async function validateArtifactContract(args: {
     }
     failures.push(...validateFormat(contract, text));
     failures.push(...validateLookalikes(contract, text));
-    if (args.deliverableType && text.trim()) {
+    if ((contract.role ?? "deliverable") === "deliverable" && args.deliverableType && text.trim()) {
       failures.push(...validateDeliverableStructure(text, args.deliverableType, args.deliverableContract));
     }
 
