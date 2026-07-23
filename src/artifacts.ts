@@ -74,7 +74,7 @@ const PROCESS_MARKERS = [
   "I will", "I have", "I'll", "Now I", "Let me", "I need to", "I've gathered", "Completed", "Done",
 ];
 const CLAIM_MARKERS = ["已完成", "完成了", "文件已写入", "我已经", "I have completed", "completed the task", "done"];
-const STREAM_MARKERS = ["Hermes Agent 输出", "LLM 输出", "执行中", "tool", "stdout", "stderr"];
+const STREAM_MARKERS = ["Hermes Agent 输出", "LLM 输出", "执行中:", "tool:", "tool_call:", "stdout:", "stderr:", "Tool:", "Tool call:"];
 
 const DELIVERABLE_TEMPLATES: Record<DeliverableType, DeliverableContract> = {
   research: {
@@ -525,7 +525,14 @@ function looksLikeClaim(text: string): boolean {
 }
 
 function looksLikeStream(text: string): boolean {
-  return sampleMarkerLines(text, STREAM_MARKERS).length >= 2;
+  const lines = meaningfulLines(text);
+  if (lines.length === 0) return false;
+  const marked = sampleMarkerLines(text, STREAM_MARKERS);
+  if (marked.length < 2) return false;
+  // 豁免:有正文实质内容且 stream 标记行占比低(跟 looksLikeClaim 一致的豁免思路)
+  // 如果大部分有意义行都是 stream 标记行,说明确实是日志不是正文
+  if (hasBodyShape(lines) && marked.length / lines.length < 0.4) return false;
+  return true;
 }
 
 function looksMetadataOnly(text: string): boolean {
