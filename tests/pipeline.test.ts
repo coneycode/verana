@@ -61,13 +61,13 @@ test("planGraphWorkflow (Composer 自动规划,不传 spec)", async () => {
   assert.equal(state.status.workflows.solution?.workflow_status, "plan_review");
 });
 
-test("composeGraphWorkflow splits research into evidence collection and structured writing", async () => {
+test("composeGraphWorkflow preserves Composer capabilities without forcing evidence split", async () => {
   await rm(TMP, { recursive: true, force: true });
   await mkdir(TMP, { recursive: true });
   const p = await createProject(TMP, "调研产品", "调研");
   const spec: GraphWorkflowSpec = {
     ...makeSpec(p.id),
-    goal: { raw: "调研产品", clarified: "调研产品", deliverable_type: "research", iterative: false, acceptance: ["评测能力包含自动化测试、效果评估、评分体系", "可观测能力包含链路追踪、日志、指标监控、告警、流量回放", "包含功能矩阵表格"] },
+    goal: { raw: "调研产品", clarified: "调研产品", deliverable_type: "research", iterative: false, acceptance: ["结构化调研报告"] },
     capabilities: [
       { id: "write_report", kind: "agent", desc: "调研并写报告", outputs: [{ path: "solution/research_report.md", desc: "调研报告" }], checks: [{ method: "llm_rubric", desc: "结构完整" }], updates: ["summary"] },
     ],
@@ -75,15 +75,11 @@ test("composeGraphWorkflow splits research into evidence collection and structur
     completion_criteria: ["结构化调研报告通过验证"],
   };
   const normalized = await composeGraphWorkflow(TMP, p.id, fakeClient, spec);
-  const evidence = normalized.capabilities.find((cap) => cap.id === "collect_evidence");
-  const writer = normalized.capabilities.find((cap) => cap.id === "write_report");
-  assert.ok(evidence);
-  assert.equal(evidence.outputs?.[0].role, "evidence");
-  assert.equal(evidence.outputs?.[0].materializable, false);
-  assert.ok(writer?.inputs?.some((input) => input.path === "solution/evidence/raw_research.md"));
-  assert.equal(writer?.outputs?.[0].role, "deliverable");
-  assert.equal(normalized.entry_node, "collect_evidence");
-  // deliverable_contract 不再从澄清推导章节,只有 base 默认(产品概览/主要发现/结论与建议)
+  // 不再强制拆分:Composer 的能力清单原样保留
+  assert.equal(normalized.capabilities.length, 1);
+  assert.equal(normalized.capabilities[0].id, "write_report");
+  assert.equal(normalized.entry_node, "write_report");
+  // deliverable_contract 有 base 默认章节
   assert.ok(normalized.deliverable_contract?.required_sections.includes("产品概览"));
   assert.ok(normalized.deliverable_contract?.required_sections.includes("主要发现"));
   assert.ok(normalized.deliverable_contract?.required_sections.includes("结论与建议"));
