@@ -68,8 +68,8 @@
 
 每个角色只做一件事,数据单向流经闭环:
 - **executor**:只干活,产出 claim 与声明输出的磁盘产物。claim 只是证词,不是交付物。
-- **artifact_collector**(运行时内核职责):收集节点声明的 outputs,冻结 artifact snapshot,做机械契约检查。它不是 LLM 角色,而是 scaffold 的事实层。Research 类 workflow 中 outputs 必须区分 `role=evidence` 与 `role=deliverable`; evidence 只做事实留痕,不套最终正文结构。
-- **materializer**(轻 LLM,运行时兜底):当 declared deliverable 缺失、像 stream/log、缺结构时,基于 claim/stream/坏 artifact/evidence inputs 自动沉淀一次正式 artifact,写回声明 output 后重新冻结与校验。它不是把 claim 直接当真相,而是显式生成 materialization-report 并保留来源约束。
+- **artifact_collector**(运行时内核职责):收集节点声明的 outputs,冻结 artifact snapshot,做机械契约检查(通用层:存在/非空/不像过程日志/格式 parse)。结构层(章节/禁止模式)交给 verifier 语义判断,不做机械字符串匹配。它不是 LLM 角色,而是 scaffold 的事实层。
+- **materializer**(轻 LLM,scheduler 决策触发的兜底):当 artifact contract 判 fail 且 failure codes 属于形态类(looks_like_*/metadata_only/too_small)时,scheduler 可选 action="materialize" 触发 materializer。materializer 基于 claim/stream/坏 artifact 整理出正式 artifact,写回声明 output 后重新冻结与校验。不是自动旁路,是 scheduler 的一个 action(跟 retry/switch/human 平级)。missing/empty 类失败不触发 materialize(根本没有内容可整理,应重跑)。materialize 不增加 retries 计数(它是规划手段,不是重试)。
 - **project deliverable contract**:由当前项目的澄清、acceptance、hard_constraints 生成,通用 research 只提供底线结构(如产品概览/主要发现/结论与建议),具体的 `评测3维` / `可观测5维` / `功能矩阵` 等要求必须来自当前项目,不能固化为全局默认。
 - **verifier**:只判对错。判冻结后的 artifact(非 claim),输出 verdict{passed, reasons}。
   不归因、不决定下一步。claim 保留供归因用。
@@ -92,12 +92,14 @@ diagnostician 输出六类根因之一(覆盖链路每一环,不重叠):
 | C 上下文缺失/错误 | 节点对、指令对,但输入(blackboard/inputs)不对 | 修正上下文后重跑 |
 | D 验收标准不合理 | executor 没错,是 verifier 的 checks 定歪了 | 回规划修正该节点 checks |
 | E 目标/规划有问题 | 目标本身不清晰/矛盾,或规划方向错 | 回澄清 / 重大重规划 |
-| F 产物契约失败 | scaffold 收集到的 artifact 缺失、为空、像过程日志/claim、自述覆盖正文、或 verifier 读错对象 | 先停在 artifact 层修复执行/收集契约;必要时人审,不盲目归为 A 重试 |
+| F 产物契约失败 | scaffold 收集到的 artifact 缺失、为空、像过程日志/claim、自述覆盖正文 | 看 failure codes 分流:形态类(looks_like_*/metadata_only/too_small)→ materialize;缺失类(missing/empty)→ retry |
 
 scheduler 路由动作分两档:
 - **高频自动路由**(scheduler 自主决策):具体化指令重跑(A)、修正上下文重跑(C)、
-  换一个现有节点、补节点(B,经 Composer 复核)、改 checks(D)、跳过非必要节点继续。
-- **低频重大决策 → 转人审**:删/改现有节点、回澄清/重规划(E)、调整完成标准、终止任务。
+  换一个现有节点、补节点(B,经 Composer 复核)、改 checks(D)、跳过非必要节点继续、
+  materialize(F 形态类失败,scheduler 决策触发,不算 retry)。
+- **低频重大决策 → 转人审**:删/改现有节点、回澄清/重规划(E)、调整完成标准、终止任务、
+  重试耗尽(maxRetries 硬护栏触发,materialize 不计入)。
 
 **执行资源/配置问题(429/超时/max_turns 不足)不进根因分类** —— 它是脚手架自己的配置
 问题,不是任务链路根因。由脚手架层确定性兜底(自动放宽参数/限流等待),不占决策,
@@ -710,8 +712,11 @@ verana run <id>            # 启动/继续(自动检测中断点续)
 verana logs <id> [run]     # 看 claim/verdict/日志 / 事件轨迹
 verana cancel <id>
 ```
-- SSE 事件:status_changed / plan_progress / scheduler_decision / node_selected(+理由)/ run_created /
-  verdict / diagnosis / blackboard_updated / guardrail_hit / human_required / llm_stream / llm_status
+- SSE 事件(unnamed event,前端 onmessage 统一分发,按 data.type 路由):
+  status_changed / plan_progress / scheduler_decision / node_selected(+理由)/ run_created /
+  verdict / diagnosis / blackboard_updated / guardrail_hit / human_required / llm_stream / llm_status /
+  artifact_collected / artifact_validated / artifact_failed /
+  artifact_materialized / artifact_materialization_failed
 
 ---
 
@@ -752,9 +757,9 @@ verifier 主力 command/tests + anti-cheat、workdir git 隔离 + 每节点 diff
 
 ## 附录 A:设计项状态总览
 
-实现同步(2026-07-15):动态调度闭环已落地到 `src/graph-engine.ts` / `src/scheduler.ts` / `src/diagnostician.ts` / `src/event-log.ts` / `src/pipeline.ts` / `src/server.ts`。近期实现重点是控制面打磨:plan_progress 展示规划期 LLM 输入输出、events.log 重建 timeline、plan_review rerun 清理 workflow/runs/events 并重触发 plan、scheduler_decision 与 node_selected 分离以避免 UI 重复失败。
+实现同步(2026-07-23):动态调度闭环已落地到 `src/graph-engine.ts` / `src/scheduler.ts` / `src/diagnostician.ts` / `src/event-log.ts` / `src/pipeline.ts` / `src/server.ts` / `src/artifacts.ts` / `src/materializer.ts`。artifact contract 全链路实现(收集/冻结/通用层机械检查)。materializer 改为 scheduler 决策触发(action="materialize"),不再自动旁路。章节结构检查交给 verifier 语义判断,不做机械字符串匹配。SSE 改 unnamed event,前端 onmessage 统一分发。scaffold 不越界做规划(删掉 ensureResearchEvidenceSplit/deriveResearchSections)。
 
-设计修正(2026-07-15):此前"claim 直接作为 deliverable"被证明会污染产物真相源,导致过程自述覆盖正式输出。新锁定方向是运行时内核 + artifact contract:claim 只作证词,声明 outputs 的 artifact snapshot 才是 verifier 输入。代码仍需按本节修正。
+设计修正(2026-07-23):运行时内核 + artifact contract 已落地。claim 只作证词,声明 outputs 的 artifact snapshot 才是 verifier 输入。materializer 由 scheduler 决策触发,不再自动旁路。章节结构检查交给 verifier 语义判断。scaffold 不越界做规划。
 
 核心执行模型(本次重构):
 - [x] 0. 重构动机
@@ -791,11 +796,14 @@ verifier 主力 command/tests + anti-cheat、workdir git 隔离 + 每节点 diff
 - [x] 进度真相层(scheduler 吃 verdict 不吃 claim,buildProgressTruth 机械折叠)—— 已实现
 - [x] 重节点走 hermes CLI(带 web 工具)+ 执行过程实时流 —— 已实现
 - [x] 人审 failure 场景展示原因+最近产出+重试 —— 已实现
-- [~] diagnostician 归因环节(六类根因)—— A-E 已实现;F_artifact_contract_failure 待实现
+- [x] diagnostician 归因环节(六类根因 A-F)—— 已实现(F 类确定性判定,不调 LLM)
 - [x] 指令组装五要素(desc+checks+软引导+上下文+失败反馈)—— 已实现
-- [~] artifact contract(声明 outputs → artifact snapshot → 机械契约检查 → verifier)—— 设计已锁定,代码待实现
-- [x] scheduler 路由(六类根因→修复动作,高频自动/低频人审)—— A-E 已实现;F_artifact_contract_failure 待实现
-- [~] verifier 判 artifact snapshot(非 claim),轻节点不一致也走归因 —— 轻节点已实现;重节点 artifact snapshot 输入待实现
+- [x] artifact contract(声明 outputs → artifact snapshot → 通用层机械检查 → verifier)—— 已实现
+  通用层:存在/非空/不像过程日志/格式 parse;结构层(章节/禁止模式)交给 verifier 语义判断
+- [x] scheduler 路由(六类根因→修复动作,高频自动/低频人审)—— 已实现
+  F 类按 failure codes 分流:形态类→materialize;缺失类→retry
+  materialize 是 scheduler 的 action,不算 retry,maxRetries 硬护栏只拦截 retry
+- [x] verifier 判 artifact snapshot(非 claim)—— 已实现
 
 ---
 

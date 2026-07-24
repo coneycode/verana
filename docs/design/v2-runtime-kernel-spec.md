@@ -1,7 +1,7 @@
 # Verana v2 — Runtime Kernel / Artifact Contract 落地规格
 
-状态: [LOCKED] 运行时事实层规格
-最后更新: 2026-07-15
+状态: [LOCKED] 运行时事实层规格(已实现)
+最后更新: 2026-07-23
 关联总纲: `docs/design/v2-orchestration-design.md`
 
 本文不是原则说明,而是给代码实现用的运行时内核规格。目标是把“先建立事实层,再让 LLM 做语义判断”落成确定性流程,避免 claim / stream / deliverable 混用导致简单错误反复出现。

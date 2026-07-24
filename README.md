@@ -4,7 +4,7 @@ Verana v2 is a project-based Agent Workflow delivery scaffold.
 
 Current scope: solution-delivery loop (clarify → compose → execute → verify → gate).
 
-Status: v2 graph workflow implementation is active. The dynamic scheduler, event-log timeline, verdict-driven progress truth, diagnostician failure attribution, plan self-check loop, Hermes executor path, and Web/SSE control plane are implemented and being refined.
+Status: v2 graph workflow implementation is active. The dynamic scheduler, event-log timeline, verdict-driven progress truth, diagnostician failure attribution (A-F), artifact contract (collect/freeze/validate), materializer (scheduler-decided), plan self-check loop, Hermes executor path, and Web/SSE control plane (unnamed event, onmessage dispatch) are implemented and being refined.
 
 ## Quick Start
 
