@@ -79,10 +79,8 @@ test("composeGraphWorkflow preserves Composer capabilities without forcing evide
   assert.equal(normalized.capabilities.length, 1);
   assert.equal(normalized.capabilities[0].id, "write_report");
   assert.equal(normalized.entry_node, "write_report");
-  // deliverable_contract 有 base 默认章节
-  assert.ok(normalized.deliverable_contract?.required_sections.includes("产品概览"));
-  assert.ok(normalized.deliverable_contract?.required_sections.includes("主要发现"));
-  assert.ok(normalized.deliverable_contract?.required_sections.includes("结论与建议"));
+  // deliverable_contract base 默认为空(由 Composer 决定是否输出)
+  assert.equal(normalized.deliverable_contract?.required_sections.length ?? 0, 0);
 });
 
 function projectPath(root: string, id: string) { return join(root, "projects", id); }

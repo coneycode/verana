@@ -49,6 +49,7 @@ const COMPOSER_SYSTEM = `你是一个 workflow 规划者(Composer)。你的职�
   "completion_criteria": ["完成标准1", ...],
   "hard_constraints": ["客观硬约束:如输出格式/数量/预算/合规/平台限定"],
   "soft_guidance": ["主观软引导:如风格基调/内容取舍/表达偏好"],
+  "deliverable_contract": {"required_sections": ["章节名(可选,根据任务决定)"], "forbidden_patterns": ["禁止出现的内容模式(可选)"]},
   "agents": ["角色名列表"],
   "required_capabilities": ["web", "browser", "long_running"]
 }
@@ -64,6 +65,7 @@ const COMPOSER_SYSTEM = `你是一个 workflow 规划者(Composer)。你的职�
 - hard_constraints:从澄清信息中提取客观、可判定的约束(格式/数量/预算/合规/平台),这些将变成 checks 的种子
 - soft_guidance:从澄清信息中提取主观方向性偏好(风格/基调/取舍),这些只作引导不强制
 - 拿不准是硬还是软的,默认归 soft_guidance(宁可少锁不可锁错)
+- deliverable_contract:根据任务性质决定是否输出 required_sections/forbidden_patterns。只有任务明确需要特定章节结构时才写;不确定就不输出(留空)。不要硬套通用章节(如"结论与建议"不一定适用所有调研任务)
 - entry_node 是调度大脑第一步选的节点(通常是最早的能力)
 - 用中文写 desc
 - required_capabilities 从 [web, browser, long_running] 里选

@@ -542,7 +542,7 @@ async function verifyAgentNode(rootDir: string, projectId: string, runId: string
     "交付物 Artifact Snapshot:",
     artifactBody,
     "",
-    "请独立判断 artifact snapshot 是否满足验收标准和交付物结构要求。不要把 claim、执行过程日志、过程自述当成交付物。缺少必需章节或出现禁止模式必须判失败。",
+    "请独立判断 artifact snapshot 是否满足验收标准。不要把 claim、执行过程日志、过程自述当成交付物。交付物结构要求(如有)仅供参考,节点 checks 是主要验收标准;deliverable_contract 与 checks 冲突时以 checks 为准。",
   ].join("\n");
 
   bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "verifying", message: "验证模型判定中..." }));

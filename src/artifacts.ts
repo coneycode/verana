@@ -77,19 +77,9 @@ const CLAIM_MARKERS = ["已完成", "完成了", "文件已写入", "我已经",
 const STREAM_MARKERS = ["Hermes Agent 输出", "LLM 输出", "执行中:", "tool:", "tool_call:", "stdout:", "stderr:", "Tool:", "Tool call:"];
 
 const DELIVERABLE_TEMPLATES: Record<DeliverableType, DeliverableContract> = {
-  research: {
-    required_sections: ["产品概览", "主要发现", "结论与建议"],
-    forbidden_patterns: ["思维记录", "调研过程", "我查了", "我看了", "我分析了", "让我先", "接下来我将"],
-  },
-  creative: {
-    required_sections: ["正文"],
-    forbidden_patterns: ["调研过程", "思维记录", "我查了", "我看了", "让我先", "接下来我将"],
-    notes: ["创作类交付物应以正文为中心,不要把过程笔记冒充正文"],
-  },
-  implementation: {
-    required_sections: ["问题", "方案", "实现细节", "验证"],
-    forbidden_patterns: ["思维记录", "我查了", "我看了", "让我先", "接下来我将"],
-  },
+  research: { required_sections: [], forbidden_patterns: [] },
+  creative: { required_sections: [], forbidden_patterns: [], notes: ["创作类交付物应以正文为中心,不要把过程笔记冒充正文"] },
+  implementation: { required_sections: [], forbidden_patterns: [] },
 };
 
 export function getDefaultDeliverableContract(deliverableType: DeliverableType): DeliverableContract {
@@ -129,14 +119,12 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
 }
 
 export function getProjectDeliverableContract(spec: Pick<GraphWorkflowSpec, "goal" | "clarifications" | "hard_constraints"> & { deliverable_contract?: Partial<DeliverableContract> }): DeliverableContract {
-  const base = getDefaultDeliverableContract(spec.goal.deliverable_type);
+  // 不合并 base 默认值 — 做不到通用,由 Composer 决定
   const override = spec.deliverable_contract;
-  const notes = uniqueStrings([...(base.notes ?? []), ...(override?.notes ?? [])]);
-
   return {
-    required_sections: uniqueStrings([...base.required_sections, ...(override?.required_sections ?? [])]),
-    forbidden_patterns: uniqueStrings([...base.forbidden_patterns, ...(override?.forbidden_patterns ?? [])]),
-    notes: notes.length > 0 ? notes : undefined,
+    required_sections: override?.required_sections ? [...override.required_sections] : [],
+    forbidden_patterns: override?.forbidden_patterns ? [...override.forbidden_patterns] : [],
+    notes: override?.notes?.length ? [...override.notes] : undefined,
   };
 }
 

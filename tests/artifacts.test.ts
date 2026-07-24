@@ -52,13 +52,14 @@ test("artifact collector freezes declared output snapshot", async () => {
 
 test("deliverable structure is checked by verifier not mechanical validation", () => {
   // 机械检查不再做章节匹配,交给 verifier 语义判断
+  // validateDeliverableStructure 用传入的 contract(或空默认)检查,但 validateArtifactContract 不再调它
+  const researchContract = { required_sections: ["产品概览", "主要发现"], forbidden_patterns: ["让我先"] };
   const badResearch = "# 调研笔记\n\n## 产品概览\n\n让我先看一下资料。";
-  const researchFailures = validateDeliverableStructure(badResearch, "research");
-  // validateDeliverableStructure 仍然存在(供外部调用),但 validateArtifactContract 不再调它
-  // 这里只验证函数本身的行为不变,不影响 artifact contract
+  const researchFailures = validateDeliverableStructure(badResearch, "research", researchContract);
   assert.equal(researchFailures.some((f) => f.code === "deliverable_structure_missing_section"), true);
+  assert.equal(researchFailures.some((f) => f.code === "deliverable_structure_forbidden_pattern"), true);
 
-  // getProjectDeliverableContract 不再从澄清信息推导章节,只用 base + override
+  // getProjectDeliverableContract 不再有 base 默认章节,没有 override 就是空
   const projectContract = getProjectDeliverableContract({
     goal: {
       raw: "竞品对比",
@@ -75,17 +76,18 @@ test("deliverable structure is checked by verifier not mechanical validation", (
     hard_constraints: ["必须客观呈现各产品能力现状"],
     deliverable_contract: undefined,
   });
-  // 不再推导,只有 base 默认章节
+  // 不再推导,base 默认为空(没有 override 就是空 contract)
   assert.equal(projectContract.required_sections.includes("评测3维"), false);
   assert.equal(projectContract.required_sections.includes("可观测5维"), false);
   assert.equal(projectContract.required_sections.includes("功能矩阵"), false);
-  assert.equal(projectContract.required_sections.includes("产品概览"), true);
-  assert.equal(projectContract.required_sections.includes("主要发现"), true);
+  assert.equal(projectContract.required_sections.length, 0);
 
   const creativeFailures = validateDeliverableStructure("# 小说章节\n\n## 正文\n\n夜色压下来,街角的灯忽明忽暗。", "creative");
   assert.equal(creativeFailures.length, 0);
 
-  const implementationFailures = validateDeliverableStructure("# 修复记录\n\n## 问题\n\n缺少校验。\n\n## 方案\n\n加入结构契约。", "implementation");
+  // implementation 默认不再有固定章节,需要传 contract
+  const implContract = { required_sections: ["问题", "方案", "实现细节", "验证"], forbidden_patterns: [] };
+  const implementationFailures = validateDeliverableStructure("# 修复记录\n\n## 问题\n\n缺少校验。\n\n## 方案\n\n加入结构契约。", "implementation", implContract);
   assert.equal(implementationFailures.some((f) => f.message.includes("实现细节")), true);
   assert.equal(implementationFailures.some((f) => f.message.includes("验证")), true);
 });
