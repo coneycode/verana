@@ -315,9 +315,11 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     const unsubscribe = bus.subscribe(request.params.id, (event) => {
       reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
     });
-    // 也订阅通配事件(LLM 状态等全局事件)
+    // 也订阅通配事件(LLM 状态等全局事件),但跳过当前项目的事件(上面已处理)
     const unsubscribeAll = bus.subscribe("*", (event) => {
-      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+      if (event.project_id !== request.params.id) {
+        reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+      }
     });
     request.raw.on("close", () => { unsubscribe(); unsubscribeAll(); });
   });
