@@ -182,9 +182,9 @@ function render() {
 
 function renderSteps() {
   const phase = getPhase();
-  const order = STEPS.map(s => s.key);
-  const idx = order.indexOf(phase);
-  $('steps').innerHTML = STEPS.filter(s => s.label).map((s, i) => {
+  const visibleSteps = STEPS.filter(s => s.label);
+  const idx = visibleSteps.findIndex(s => s.key === phase);
+  $('steps').innerHTML = visibleSteps.map((s, i) => {
     let cls = '';
     let clickable = false;
     if (idx === -1) { cls = i === 0 ? 'done' : ''; clickable = i === 0; }
