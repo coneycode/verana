@@ -12,7 +12,10 @@ export class EventBus {
 
   publish(event: ProjectEvent): void {
     this.emitter.emit(event.project_id, event);
-    this.emitter.emit("*", event);
+    // 避免通配事件发两次(project_id === "*" 时上面已经 emit 过了)
+    if (event.project_id !== "*") {
+      this.emitter.emit("*", event);
+    }
   }
 
   subscribe(projectId: string, listener: (event: ProjectEvent) => void): () => void {

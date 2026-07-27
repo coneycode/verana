@@ -1010,7 +1010,12 @@ function connectEvents() {
     }
     if (type === 'plan_progress') {
       if (payload.message) setPlanProgress(payload.message);
-      if (payload.step) planBlocks.push({ step: payload.step, message: payload.message || '', content: payload.content || '' });
+      if (payload.step) {
+        const key = payload.step + '\0' + (payload.message || '') + '\0' + (payload.content || '');
+        if (!planBlocks.some(b => (b.step+'\0'+b.message+'\0'+b.content) === key)) {
+          planBlocks.push({ step: payload.step, message: payload.message || '', content: payload.content || '' });
+        }
+      }
       const phase = typeof getPhase === 'function' ? getPhase() : '';
       if (phase === 'composing') {
         const el = document.getElementById('mainArea');
