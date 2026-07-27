@@ -324,6 +324,27 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     request.raw.on("close", () => { unsubscribe(); unsubscribeAll(); });
   });
 
+  // 启动时恢复:检测卡在 executing 且非人审的项目,自动重新触发执行
+  try {
+    const projects = await listProjects(options.rootDir);
+    for (const p of projects) {
+      try {
+        const state = await getProject(options.rootDir, p.id);
+        const wf = state.status.workflows.solution;
+        if (wf && wf.workflow_status === "executing" && wf.awaiting !== "human") {
+          console.log(`[recover] 项目 ${p.id} 卡在 executing(awaiting=${wf.awaiting}),恢复执行`);
+          runGraphProject(options.rootDir, p.id, client, bus)
+            .then(() => console.log(`[recover] ${p.id} 恢复执行完成`))
+            .catch((err: Error) => console.error(`[recover] ${p.id} 恢复失败:`, err.message));
+        }
+      } catch {
+        // skip broken project
+      }
+    }
+  } catch (err) {
+    console.error("[recover] 恢复检测失败:", (err as Error)?.message ?? err);
+  }
+
   return app;
 }
 
