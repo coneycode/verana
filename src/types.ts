@@ -61,6 +61,8 @@ export interface CapabilityNode {
   checks: Array<{ method: CheckMethod; target?: string; desc: string }>;
   /** 这个节点负责更新 blackboard 的哪些字段(更新记忆节点用) */
   updates?: string[];
+  /** 实例清单:空/不写 = 一次性节点; 非空 = 可多次调度,每次处理一个实例 */
+  instances?: string[];
 }
 
 export interface Guardrails {

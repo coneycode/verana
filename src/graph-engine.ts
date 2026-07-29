@@ -90,6 +90,17 @@ export async function runGraphProject(rootDir: string, projectId: string, client
     }
   }
 
+  // 初始化 instances 的 remaining:有非空 instances 的节点,blackboard 里初始化 {node_id}_remaining
+  for (const cap of spec.capabilities) {
+    if (cap.instances && cap.instances.length > 0) {
+      const remainingKey = `${cap.id}_remaining`;
+      if (!wf.blackboard[remainingKey] || !Array.isArray(wf.blackboard[remainingKey])) {
+        wf.blackboard[remainingKey] = [...cap.instances];
+      }
+    }
+  }
+  await saveProjectState(rootDir, state);
+
   let consecutiveFail = 0;
 
   while (true) {
@@ -308,7 +319,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
     await appendEvent(solutionDir, { type: "run_created", node: node.id, run_id: runId });
     bus?.publish(projectEvent("node_selected", projectId, { node: node.id, runId, reason: decision.reason, status: "running" }));
 
-    const execResult = await executeNode(rootDir, projectId, runId, node, spec, wf.blackboard, client, bus);
+    const execResult = await executeNode(rootDir, projectId, runId, node, spec, wf.blackboard, client, bus, decision.instance);
     const runResult = execResult.content;
     const instruction = execResult.instruction;
 
@@ -367,6 +378,17 @@ export async function runGraphProject(rootDir: string, projectId: string, client
       bus?.publish(projectEvent("blackboard_updated", projectId, { node: node.id, fields: node.updates }));
     }
 
+    // verdict pass — 如果有 instance,从 blackboard 的 remaining 里移除
+    if (decision.instance) {
+      const remainingKey = `${node.id}_remaining`;
+      const remaining = wf.blackboard[remainingKey];
+      if (Array.isArray(remaining)) {
+        wf.blackboard[remainingKey] = remaining.filter((i: string) => i !== decision.instance);
+        await appendEvent(solutionDir, { type: "blackboard_updated", node: node.id, data: { field: remainingKey, removed: decision.instance, remaining: wf.blackboard[remainingKey] } });
+        bus?.publish(projectEvent("blackboard_updated", projectId, { node: node.id, field: remainingKey }));
+      }
+    }
+
     wf.iteration += 1;
     await appendEvent(solutionDir, { type: "node_done", node: node.id, run_id: runId });
     await saveProjectState(rootDir, state);
@@ -378,7 +400,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
   }
 }
 
-async function executeNode(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, bb: Record<string, unknown>, client: LlmClient, bus?: EventBus): Promise<{ content: string; instruction: string }> {
+async function executeNode(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, bb: Record<string, unknown>, client: LlmClient, bus: EventBus | undefined, instance?: string): Promise<{ content: string; instruction: string }> {
   const dir = projectPath(rootDir, projectId);
   const solutionDir = join(dir, "solution");
   const runDir = join(dir, "runs", runId);
@@ -423,6 +445,9 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     "",
     `节点: ${node.id} (${node.kind})`,
     `描述: ${node.desc}`,
+    "",
+    // instance:scheduler 选的实例,告诉 executor 这次处理哪个
+    instance ? `本次处理实例: ${instance}` : "",
     "",
     // 不塞全局 hard_constraints — 相关硬约束已通过 checks 分配到节点,塞全局会让节点做超出职责的事
     checksList ? `验收标准(必须满足,你会被按这些标准验证):\\n${checksList}` : "",

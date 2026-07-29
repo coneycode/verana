@@ -5,7 +5,11 @@ import { renderBlackboardForContext } from "./blackboard.js";
 const SCHEDULER_SYSTEM = `你是一个调度大脑(scheduler)。你是调度决策的唯一出口。你的职责是基于当前进度真相(含归因结果),决定下一步做什么。
 
 你必须返回 JSON:
-{"next_node": "节点id(留空表示不执行节点)", "reason": "为什么这么决策", "capability_gap": "如果需要清单里没有的能力,描述需要什么(否则留空)", "is_complete": true/false, "action": "路由动作"}
+{"next_node": "节点id(留空表示不执行节点)", "reason": "为什么这么决策", "capability_gap": "如果需要清单里没有的能力,描述需要什么(否则留空)", "is_complete": true/false, "action": "路由动作", "instance": "本次处理的实例名(仅对有remaining的节点)"}
+
+instance 字段:
+- 对于 blackboard 里有 {node_id}_remaining 字段的节点:从 remaining 数组里选一个未完成的实例,输出 instance
+- 一次性节点(没有 remaining):不输出 instance
 
 路由动作(action)可选值:
 - "execute":正常执行 next_node 指定的节点
@@ -41,6 +45,7 @@ export interface SchedulerDecision {
   capability_gap: string;
   is_complete: boolean;
   action?: "execute" | "retry_with_feedback" | "switch_node" | "request_capability" | "skip_node" | "human" | "materialize";
+  instance?: string;  // scheduler 选择的实例(有 instances 的节点才输出,一次性节点不输出)
 }
 
 export async function runScheduler(

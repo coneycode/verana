@@ -31,6 +31,14 @@ export function validateGraphWorkflow(spec: GraphWorkflowSpec): ValidationResult
         errors.push(`capability ${cap.id} ${failure.message}`);
       }
     }
+    // instances: 有非空 instances 的节点,blackboard 必须有 {node_id}_remaining 字段
+    if (cap.instances && cap.instances.length > 0) {
+      const remainingKey = `${cap.id}_remaining`;
+      const hasRemainingField = spec.blackboard_schema?.fields?.some(f => f.key === remainingKey);
+      if (!hasRemainingField) {
+        errors.push(`capability ${cap.id} has instances but blackboard_schema missing field "${remainingKey}"`);
+      }
+    }
   }
 
   // 入口节点存在
