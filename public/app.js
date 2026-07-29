@@ -9,7 +9,7 @@ let activeRunId = null;
 // Mermaid 初始化
 if (typeof mermaid !== 'undefined') { mermaid.initialize({ startOnLoad: false, theme: 'dark', flowchart: { curve: 'basis' } }); }
 
-// 生成能力关系图(只画节点,不推测边)
+// 生成执行图:展示节点 + instances + 推断路径
 function buildCapabilityGraph(spec) {
   if (!spec || !spec.capabilities) return '';
   const caps = spec.capabilities;
@@ -17,11 +17,35 @@ function buildCapabilityGraph(spec) {
   lines.push('  classDef agent fill:#1a2744,stroke:#3b82f6,color:#93c5fd');
   lines.push('  classDef light fill:#1a2a1a,stroke:#22c55e,color:#86efac');
   lines.push('  classDef entry fill:#1a1f2e,stroke:#f59e0b,color:#fcd34d,stroke-width:2px');
+  lines.push('  classDef instance fill:#0d1626,stroke:#475569,color:#94a3b8');
+  // 先画节点
   for (const c of caps) {
     const desc = c.desc.slice(0, 40);
     const shape = c.kind === 'agent' ? '["' + desc + '"]' : '(("' + desc + '"))';
     lines.push('  ' + c.id + shape);
     lines.push('  class ' + c.id + ' ' + (c.kind === 'agent' ? 'agent' : 'light'));
+    // 有 instances 的节点:展开实例
+    if (c.instances && c.instances.length > 0) {
+      for (let i = 0; i < c.instances.length; i++) {
+        const inst = c.instances[i];
+        const instId = c.id + '_i' + i;
+        lines.push('  ' + instId + '("' + escapeHtml(inst) + '")');
+        lines.push('  class ' + instId + ' instance');
+        lines.push('  ' + c.id + ' --> ' + instId);
+      }
+    }
+  }
+  // 推断路径:按能力清单顺序连线(不是预设图,是可能的执行路径)
+  for (let i = 0; i < caps.length - 1; i++) {
+    const cur = caps[i];
+    const next = caps[i + 1];
+    // 有 instances 的节点:最后一个实例 → 下一个节点
+    if (cur.instances && cur.instances.length > 0) {
+      const lastInstId = cur.id + '_i' + (cur.instances.length - 1);
+      lines.push('  ' + lastInstId + ' --> ' + next.id);
+    } else {
+      lines.push('  ' + cur.id + ' --> ' + next.id);
+    }
   }
   if (spec.entry_node) lines.push('  class ' + spec.entry_node + ' entry');
   return lines.join('\n');
