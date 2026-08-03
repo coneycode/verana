@@ -5,11 +5,16 @@ import { renderBlackboardForContext } from "./blackboard.js";
 const SCHEDULER_SYSTEM = `你是一个调度大脑(scheduler)。你是调度决策的唯一出口。你的职责是基于当前进度真相(含归因结果),决定下一步做什么。
 
 你必须返回 JSON:
-{"next_node": "节点id(留空表示不执行节点)", "reason": "为什么这么决策", "capability_gap": "如果需要清单里没有的能力,描述需要什么(否则留空)", "is_complete": true/false, "action": "路由动作", "instance": "本次处理的实例名(仅对有remaining的节点)"}
+{"next_node": "节点id(留空表示不执行节点)", "reason": "为什么这么决策", "capability_gap": "如果需要清单里没有的能力,描述需要什么(否则留空)", "is_complete": true/false, "action": "路由动作", "instance": "本次处理的实例名(仅对有remaining的节点)", "context_fields": ["blackboard字段名"]}
 
 instance 字段:
 - 对于 blackboard 里有 {node_id}_remaining 字段的节点:从 remaining 数组里选一个未完成的实例,输出 instance
 - 一次性节点(没有 remaining):不输出 instance
+
+context_fields 字段(通常不输出):
+- 通常不输出 context_fields,使用节点的默认 context_inputs(规划时已定)
+- 仅在 retry/异常时,如果你认为需要调整注入给 executor 的 blackboard 字段(如补充看 review_notes,或临时去掉某些字段),才输出 context_fields
+- 不输出=用节点默认 context_inputs;输出=覆盖默认值
 
 路由动作(action)可选值:
 - "execute":正常执行 next_node 指定的节点
@@ -46,6 +51,7 @@ export interface SchedulerDecision {
   is_complete: boolean;
   action?: "execute" | "retry_with_feedback" | "switch_node" | "request_capability" | "skip_node" | "human" | "materialize";
   instance?: string;  // scheduler 选择的实例(有 instances 的节点才输出,一次性节点不输出)
+  context_fields?: string[];  // override: 这次注入给 executor 的 blackboard 字段;不输出=用节点默认 context_inputs
 }
 
 export async function runScheduler(

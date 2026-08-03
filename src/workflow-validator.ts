@@ -39,6 +39,15 @@ export function validateGraphWorkflow(spec: GraphWorkflowSpec): ValidationResult
         errors.push(`capability ${cap.id} has instances but blackboard_schema missing field "${remainingKey}"`);
       }
     }
+    // context_inputs: 声明的字段名必须在 blackboard_schema 里存在
+    if (cap.context_inputs && cap.context_inputs.length > 0) {
+      const bbFields = new Set((spec.blackboard_schema?.fields ?? []).map(f => f.key));
+      for (const field of cap.context_inputs) {
+        if (!bbFields.has(field)) {
+          errors.push(`capability ${cap.id} context_inputs references unknown blackboard field "${field}"`);
+        }
+      }
+    }
   }
 
   // 入口节点存在

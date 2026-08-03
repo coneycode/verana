@@ -319,7 +319,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
     await appendEvent(solutionDir, { type: "run_created", node: node.id, run_id: runId });
     bus?.publish(projectEvent("node_selected", projectId, { node: node.id, runId, reason: decision.reason, status: "running" }));
 
-    const execResult = await executeNode(rootDir, projectId, runId, node, spec, wf.blackboard, client, bus, decision.instance);
+    const execResult = await executeNode(rootDir, projectId, runId, node, spec, wf.blackboard, client, bus, decision.instance, decision.context_fields);
     const runResult = execResult.content;
     const instruction = execResult.instruction;
 
@@ -400,7 +400,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
   }
 }
 
-async function executeNode(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, bb: Record<string, unknown>, client: LlmClient, bus: EventBus | undefined, instance?: string): Promise<{ content: string; instruction: string }> {
+async function executeNode(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, bb: Record<string, unknown>, client: LlmClient, bus: EventBus | undefined, instance?: string, contextFieldsOverride?: string[]): Promise<{ content: string; instruction: string }> {
   const dir = projectPath(rootDir, projectId);
   const solutionDir = join(dir, "solution");
   const runDir = join(dir, "runs", runId);
@@ -408,17 +408,22 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
   const streamPath = join(runDir, "stream.md");
   await writeFile(streamPath, `# Run ${runId} — Node ${node.id}\n\n## 执行中...\n\n`, "utf8");
 
+  // fallback 链: scheduler override → 节点默认 context_inputs → null(全量)
+  const contextFields = contextFieldsOverride?.length ? contextFieldsOverride
+    : node.context_inputs?.length ? node.context_inputs
+    : null;
+
   const inputContents: string[] = [];
   for (const input of node.inputs ?? []) {
     if (input.path) {
       try { inputContents.push(`\n--- ${input.path} ---\n${await readFile(join(dir, input.path), "utf8")}`); } catch {}
     }
     if (input.ref === "blackboard") {
-      inputContents.push(`\n--- blackboard ---\n${renderBlackboardForContext(bb, spec.blackboard_schema)}`);
+      inputContents.push(`\n--- blackboard ---\n${renderBlackboardForContext(bb, spec.blackboard_schema, contextFields)}`);
     }
   }
 
-  const bbCtx = renderBlackboardForContext(bb, spec.blackboard_schema);
+  const bbCtx = renderBlackboardForContext(bb, spec.blackboard_schema, contextFields);
 
   // 验收标准明示给 executor(执行/验收信息对称)— 含 target 和 outputs 路径
   const checksList = (node.checks ?? []).map(c => `- [${c.method}] ${c.desc}${c.target ? ` (目标: ${c.target})` : ""}`).join("\n");

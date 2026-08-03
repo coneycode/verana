@@ -9,9 +9,20 @@ export function setBlackboardField(bb: Record<string, unknown>, key: string, val
   bb[key] = value;
 }
 
-export function renderBlackboardForContext(bb: Record<string, unknown>, schema: { fields: Array<{ key: string; desc: string }> }): string {
+/** 渲染 blackboard 给 LLM 上下文用。
+ *  onlyFields: 指定只渲染哪些字段(null=全量,用于 scheduler 等需要看全局的场景)
+ *  executor 调用时传 onlyFields=node.context_inputs 做精准注入
+ */
+export function renderBlackboardForContext(
+  bb: Record<string, unknown>,
+  schema: { fields: Array<{ key: string; desc: string }> },
+  onlyFields: string[] | null = null,
+): string {
   const lines: string[] = ["当前 blackboard 状态:"];
-  for (const f of schema.fields) {
+  const fieldsToRender = onlyFields
+    ? schema.fields.filter(f => onlyFields.includes(f.key))
+    : schema.fields;
+  for (const f of fieldsToRender) {
     const val = bb[f.key];
     if (val === undefined || val === null || val === "") {
       lines.push(`  ${f.key}: (空) — ${f.desc}`);

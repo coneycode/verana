@@ -64,6 +64,8 @@ export interface CapabilityNode {
   updates?: string[];
   /** 实例清单:空/不写 = 一次性节点; 非空 = 可多次调度,每次处理一个实例 */
   instances?: string[];
+  /** 这个节点执行时需要注入哪些 blackboard 字段作为上下文;不填=fallback 全量 */
+  context_inputs?: string[];
 }
 
 export interface Guardrails {

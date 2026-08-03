@@ -36,7 +36,8 @@ const COMPOSER_SYSTEM = `你是一个 workflow 规划者(Composer)。你的职�
       "outputs": [{"path": "solution/xxx.md", "desc": "产出说明", "role": "evidence | deliverable | intermediate", "materializable": true}],
       "checks": [{"method": "llm_rubric | file_exists", "desc": "验收描述", "target": "路径(file_exists时)"}],
       "updates": ["blackboard字段名(如果这个节点负责更新记忆)"],
-      "instances": ["实例1", "实例2"]  // 可多次调度的节点列出实例;一次性节点留空数组[]
+      "instances": ["实例1", "实例2"],  // 可多次调度的节点列出实例;一次性节点留空数组[]
+      "context_inputs": ["blackboard字段名"]  // 这个节点执行时需要看哪些blackboard字段;不填或留空=注入全量
     }
   ],
   "guardrails": {
@@ -69,6 +70,7 @@ const COMPOSER_SYSTEM = `你是一个 workflow 规划者(Composer)。你的职�
 - 拿不准是硬还是软的,默认归 soft_guidance(宁可少锁不可锁错)
 - deliverable_contract:根据任务性质决定是否输出 required_sections/forbidden_patterns。只有任务明确需要特定章节结构时才写;不确定就不输出(留空)。不要硬套通用章节(如"结论与建议"不一定适用所有调研任务)
 - instances:所有节点都声明 instances 字段。可多次调度的节点(如按方案/章节/维度分别处理)列出实例清单;一次性节点留空数组[]。对于有非空 instances 的节点,blackboard_schema 里必须设计"{node_id}_remaining"字段(记录未完成实例,bounded=true)
+- context_inputs:每个节点声明执行时需要参考的 blackboard 字段。只注入这个节点真正需要的字段(如收集证据节点只需看 evidence_index,不需要看 review_notes)。不填或留空数组=注入全量(兜底)。_remaining 字段是代码维护的不需要放进 context_inputs。context_inputs 里的字段名必须在 blackboard_schema.fields 里存在
 - entry_node 是调度大脑第一步选的节点(通常是最早的能力)
 - 用中文写 desc
 - required_capabilities 从 [web, browser, long_running] 里选
@@ -212,6 +214,7 @@ function assembleSpec(projectId: string, rawGoal: string, clarifications: Array<
     checks: c.checks?.length ? c.checks : [{ method: "llm_rubric", desc: "产出满足要求" }],
     updates: c.updates,
     instances: c.instances,
+    context_inputs: (c as { context_inputs?: string[] }).context_inputs,
   }));
 
   return {
