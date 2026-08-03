@@ -9,7 +9,8 @@ let activeRunId = null;
 // Mermaid 初始化
 if (typeof mermaid !== 'undefined') { mermaid.initialize({ startOnLoad: false, theme: 'dark', flowchart: { curve: 'basis' } }); }
 
-// 生成执行图:展示节点 + instances + 推断路径
+// 生成执行图:展示节点 + 执行次数 + instances + 顺序路径 + retry/回退边
+// 注意:图工作流不预设完整图,这里画的是"能力清单 + 可能路径",实线=顺序,虚线=条件
 function buildCapabilityGraph(spec) {
   if (!spec || !spec.capabilities) return '';
   const caps = spec.capabilities;
@@ -18,10 +19,14 @@ function buildCapabilityGraph(spec) {
   lines.push('  classDef light fill:#1a2a1a,stroke:#22c55e,color:#86efac');
   lines.push('  classDef entry fill:#1a1f2e,stroke:#f59e0b,color:#fcd34d,stroke-width:2px');
   lines.push('  classDef instance fill:#0d1626,stroke:#475569,color:#94a3b8');
-  // 先画节点
+
+  // 画节点 + 实例子节点
   for (const c of caps) {
-    const desc = c.desc.slice(0, 40);
-    const shape = c.kind === 'agent' ? '["' + desc + '"]' : '(("' + desc + '"))';
+    const instCount = (c.instances && c.instances.length > 0) ? c.instances.length : 1;
+    const desc = (c.desc || c.id).slice(0, 28);
+    const countLabel = ' ×' + instCount;
+    const label = desc + countLabel;
+    const shape = c.kind === 'agent' ? '["' + label + '"]' : '(("' + label + '"))';
     lines.push('  ' + c.id + shape);
     lines.push('  class ' + c.id + ' ' + (c.kind === 'agent' ? 'agent' : 'light'));
     // 有 instances 的节点:展开实例
@@ -35,11 +40,11 @@ function buildCapabilityGraph(spec) {
       }
     }
   }
-  // 推断路径:按能力清单顺序连线(不是预设图,是可能的执行路径)
+
+  // 顺序路径(实线):能力清单顺序 = 可能的执行顺序
   for (let i = 0; i < caps.length - 1; i++) {
     const cur = caps[i];
     const next = caps[i + 1];
-    // 有 instances 的节点:最后一个实例 → 下一个节点
     if (cur.instances && cur.instances.length > 0) {
       const lastInstId = cur.id + '_i' + (cur.instances.length - 1);
       lines.push('  ' + lastInstId + ' --> ' + next.id);
@@ -47,6 +52,21 @@ function buildCapabilityGraph(spec) {
       lines.push('  ' + cur.id + ' --> ' + next.id);
     }
   }
+
+  // retry 自环(虚线):每个节点都可能被 scheduler 重试
+  for (const c of caps) {
+    lines.push('  ' + c.id + ' -.retry.-> ' + c.id);
+  }
+
+  // 回退边(虚线):最后一个节点(通常是 review)fail → 回退到 deliverable 产出节点
+  if (caps.length >= 2) {
+    const lastNode = caps[caps.length - 1];
+    const prodNode = caps.find(c => c.outputs?.some(o => o.role === 'deliverable'));
+    if (prodNode && prodNode.id !== lastNode.id) {
+      lines.push('  ' + lastNode.id + ' -.fail回退.-> ' + prodNode.id);
+    }
+  }
+
   if (spec.entry_node) lines.push('  class ' + spec.entry_node + ' entry');
   return lines.join('\n');
 }
@@ -388,8 +408,16 @@ function renderMain() {
     $('saveSpecBtn').onclick = () => doSaveSpec();
     $('cancelSpecBtn').onclick = () => { $('specEditPanel').style.display='none'; };
     renderPlanOverview('planOverview');
-    // 能力关系图
+    // 能力关系图 + 图例
     const graphDef = buildCapabilityGraph(workflowSpec);
+    let legendHtml = '<div style="margin-top:8px;font-size:12px;color:#64748b;line-height:1.6">';
+    legendHtml += '<b>图例:</b> ';
+    legendHtml += '实线 → 顺序路径(可能执行顺序) · ';
+    legendHtml += '虚线 -.retry.-> 节点可被 scheduler 重试 · ';
+    legendHtml += '虚线 -.fail回退.-> 审核失败回退到产出节点 · ';
+    legendHtml += '×N = 预期执行次数(=instances 数量,无 instances = ×1 一次性)';
+    legendHtml += '</div>';
+    $('capGraph').insertAdjacentHTML('beforebegin', legendHtml);
     renderMermaidGraph('capGraph', graphDef);
     return;
   }
@@ -468,7 +496,8 @@ function renderPlanOverview(containerId) {
     const outputs = (cap.outputs||[]).map(o => '<div class="task-meta">产出: '+escapeHtml(o.path)+' — '+escapeHtml(o.desc)+'</div>').join('');
     const checks = (cap.checks||[]).map(c => '<div class="task-meta">验收: ['+escapeHtml(c.method)+'] '+escapeHtml(c.desc)+'</div>').join('');
     const updates = cap.updates?.length ? '<div class="task-meta">更新记忆: '+escapeHtml(cap.updates.join(', '))+'</div>' : '';
-    html += '<div class="task-card"><div class="task-row"><b>'+escapeHtml(cap.id)+'</b><span class="pill '+kindCls+'">'+escapeHtml(cap.kind)+'</span></div><div class="task-desc">'+escapeHtml(cap.desc)+'</div>'+outputs+checks+updates+'</div>';
+    const instList = cap.instances?.length ? '<div class="task-meta">实例 ×'+cap.instances.length+': '+escapeHtml(cap.instances.join(' / '))+'</div>' : '<div class="task-meta">执行次数: 1次(一次性)</div>';
+    html += '<div class="task-card"><div class="task-row"><b>'+escapeHtml(cap.id)+'</b><span class="pill '+kindCls+'">'+escapeHtml(cap.kind)+'</span></div><div class="task-desc">'+escapeHtml(cap.desc)+'</div>'+instList+outputs+checks+updates+'</div>';
   }
   html += '</div>';
   // 护栏
