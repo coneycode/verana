@@ -93,6 +93,7 @@ export async function planGraphWorkflow(
   // 机械重生成循环:Composer 生成 → 硬校验 → 充分性检查 → 有问题带问题清单重生成
   const MAX_REGEN = Number(process.env.VERANA_MAX_REGEN ?? 3);
   let lastIssues: string = "";
+  let lastValidSpec: GraphWorkflowSpec | null = null;  // 最后一次过了硬校验的 spec
 
   for (let attempt = 0; attempt < MAX_REGEN; attempt++) {
     bus?.publish(projectEvent("plan_progress", projectId, { step: "composing", attempt: attempt + 1, max: MAX_REGEN, message: `Composer 生成中(第${attempt + 1}次)...` }));
@@ -112,12 +113,16 @@ export async function planGraphWorkflow(
       throw new Error(`Generated workflow failed hard checks after ${MAX_REGEN} attempts: ${validation.errors.join("; ")}`);
     }
 
+    // 硬校验过了,记住这个 spec(兜底时用)
+    lastValidSpec = spec;
+
     // 充分性检查(独立 evaluator,三层审查)
     bus?.publish(projectEvent("plan_progress", projectId, { step: "sufficiency_check", attempt: attempt + 1, message: `充分性检查中(路径/指令/验收)...` }));
     const sufficiency = await checkSufficiency(client, spec);
     // 推充分性检查结果给前端
     bus?.publish(projectEvent("plan_progress", projectId, { step: "sufficiency_result", content: JSON.stringify(sufficiency, null, 2).slice(0, 2000) }));
     const errors = (sufficiency.issues ?? []).filter(i => i.severity === "error");
+
     if (errors.length === 0) {
       // 通过!落盘
       bus?.publish(projectEvent("plan_progress", projectId, { step: "done", message: "规划完成,进入人审" }));
@@ -129,11 +134,15 @@ export async function planGraphWorkflow(
     lastIssues = errors.map(i => `[${i.layer}] ${i.node_id ? `节点${i.node_id}: ` : ""}${i.description}`).join("\n");
   }
 
-  // 循环用尽,最后兜底:用最后一次的 spec(即使有 warning)落盘
-  const userPrompt = buildComposerPrompt(goal, clarifications);
-  const llmResult = await client.completeJson<ComposerLlmResult>("composer", COMPOSER_SYSTEM, userPrompt);
-  const spec = assembleSpec(projectId, goal, clarifications, llmResult);
-  return composeGraphWorkflow(rootDir, projectId, client, spec);
+  // 循环用尽:所有尝试都过了硬校验但都没过充分性检查。
+  // 兜底:用最后一次过了硬校验的 spec 落盘,交人审(充分性问题是 LLM 质量判断,
+  // 不是结构错误,人审可以过)。不重新调 LLM(无反馈的重新生成没有意义)。
+  if (lastValidSpec) {
+    bus?.publish(projectEvent("plan_progress", projectId, { step: "done", message: "规划完成(充分性检查未全过,交人审)" }));
+    return composeGraphWorkflow(rootDir, projectId, client, lastValidSpec);
+  }
+  // 不会到这里(循环里硬校验 fail 到最后一次会 throw,否则 lastValidSpec 非 null)
+  throw new Error("Planning failed: no valid spec generated");
 }
 
 interface ComposerLlmResult {

@@ -59,12 +59,16 @@ export function validateGraphWorkflow(spec: GraphWorkflowSpec): ValidationResult
     errors.push("blackboard_schema.fields is empty");
   }
   // 每个字段至少有一个节点负责更新(bounded 的字段尤其要)
+  // 但 _remaining 字段是代码维护的(graph-engine 初始化 + verdict pass 后代码移除),
+  // 不应该由节点 updates,豁免校验
   const updateableFields = new Set<string>();
   for (const cap of spec.capabilities ?? []) {
     for (const f of cap.updates ?? []) updateableFields.add(f);
   }
   for (const f of spec.blackboard_schema?.fields ?? []) {
     if (f.bounded && !updateableFields.has(f.key)) {
+      // _remaining 字段由 graph-engine 代码维护,不由 LLM 节点 updates
+      if (f.key.endsWith("_remaining")) continue;
       errors.push(`blackboard field ${f.key} is bounded but no node updates it`);
     }
   }

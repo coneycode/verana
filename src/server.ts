@@ -129,11 +129,11 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     if (body.spec) {
       composeGraphWorkflow(options.rootDir, request.params.id, client, body.spec)
         .then(() => { bus.publish(projectEvent("plan_composed", request.params.id)); })
-        .catch((err: Error) => { bus.publish(projectEvent("run_failed", request.params.id, { error: err.message })); });
+        .catch((err: Error) => { console.error(`[plan] ${request.params.id} failed:`, err.message); bus.publish(projectEvent("run_failed", request.params.id, { error: err.message })); });
     } else {
       planGraphWorkflow(options.rootDir, request.params.id, client, bus)
         .then(() => { bus.publish(projectEvent("plan_composed", request.params.id)); })
-        .catch((err: Error) => { bus.publish(projectEvent("run_failed", request.params.id, { error: err.message })); });
+        .catch((err: Error) => { console.error(`[plan] ${request.params.id} failed:`, err.message); bus.publish(projectEvent("run_failed", request.params.id, { error: err.message })); });
     }
     return { status: "composing", projectId: request.params.id };
   });
