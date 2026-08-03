@@ -28,9 +28,10 @@ const COMPOSER_SYSTEM = `你是一个 workflow 规划者(Composer)。你的职�
   "acceptance": ["验收标准1", ...],
   "capabilities": [
     {
-      "id": "节点id(英文短名)",
+      "id": "节点id(英文短名,如collect_evidence)",
+      "name": "中文短名(如:收集证据,前端展示用)",
       "kind": "light | agent",
-      "desc": "这个节点做什么的自然语言描述",
+      "desc": "这个节点做什么的自然语言描述(中文)",
       "agent": "角色名(agent节点必填,如writer/researcher)",
       "outputs": [{"path": "solution/xxx.md", "desc": "产出说明", "role": "evidence | deliverable | intermediate", "materializable": true}],
       "checks": [{"method": "llm_rubric | file_exists", "desc": "验收描述", "target": "路径(file_exists时)"}],
@@ -197,6 +198,7 @@ function assembleSpec(projectId: string, rawGoal: string, clarifications: Array<
   });
   const capabilities: CapabilityNode[] = (r.capabilities ?? []).map((c) => ({
     id: c.id,
+    name: (c as { name?: string }).name,
     kind: c.kind === "agent" ? "agent" : "light",
     desc: c.desc ?? "",
     agent: c.agent,

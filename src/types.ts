@@ -52,6 +52,7 @@ export interface DeliverableContract {
 /** 轻节点:单次调用;重节点:自主 agent。同一个节点可被多次执行(多轮) */
 export interface CapabilityNode {
   id: string;
+  name?: string;           // 中文短名(前端展示用,如"收集证据");不填则前端用 desc 前缀
   kind: NodeKind;
   desc: string;
   agent?: string;           // 重节点:agent 名;轻节点:可选(给 evaluator 看的角色)

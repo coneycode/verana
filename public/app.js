@@ -9,6 +9,23 @@ let activeRunId = null;
 // Mermaid 初始化
 if (typeof mermaid !== 'undefined') { mermaid.initialize({ startOnLoad: false, theme: 'dark', flowchart: { curve: 'basis' } }); }
 
+// 从 spec 查 capability 的中文短名(优先 name,fallback desc 前12字,再 fallback id)
+function nodeLabel(nodeId) {
+  if (!workflowSpec?.capabilities) return nodeId;
+  const cap = workflowSpec.capabilities.find(c => c.id === nodeId);
+  if (!cap) return nodeId;
+  if (cap.name) return cap.name;
+  if (cap.desc) return cap.desc.slice(0, 12);
+  return cap.id;
+}
+
+// 从 spec 查 capability 的完整描述(timeline 展开用)
+function nodeFullDesc(nodeId) {
+  if (!workflowSpec?.capabilities) return nodeId;
+  const cap = workflowSpec.capabilities.find(c => c.id === nodeId);
+  return cap?.desc || nodeId;
+}
+
 // 生成执行图:展示节点 + 执行次数 + instances + 顺序路径 + retry/回退边
 // 注意:图工作流不预设完整图,这里画的是"能力清单 + 可能路径",实线=顺序,虚线=条件
 function buildCapabilityGraph(spec) {
@@ -23,10 +40,9 @@ function buildCapabilityGraph(spec) {
   // 画节点 + 实例子节点
   for (const c of caps) {
     const instCount = (c.instances && c.instances.length > 0) ? c.instances.length : 1;
-    const desc = (c.desc || c.id).slice(0, 28);
-    const countLabel = ' ×' + instCount;
-    const label = desc + countLabel;
+    const label = nodeLabel(c.id) + ' ×' + instCount;
     const shape = c.kind === 'agent' ? '["' + label + '"]' : '(("' + label + '"))';
+    // mermaid 节点 id 用英文短名(c.id),标签用中文短名
     lines.push('  ' + c.id + shape);
     lines.push('  class ' + c.id + ' ' + (c.kind === 'agent' ? 'agent' : 'light'));
     // 有 instances 的节点:展开实例
@@ -103,7 +119,7 @@ function buildExecutionGraph(spec, wf) {
     const isRunning = curNode === c.id && wf?.awaiting === 'none_midstep';
     // 只画已经执行过或正在执行的节点
     if (runCount === 0 && !isRunning) continue;
-    let label = c.desc.slice(0, 35);
+    let label = nodeLabel(c.id);
     if (runCount > 0) label += '\n✓' + runCount + '次';
     if (failCount > 0) label += ' \n✗' + failCount + '次失败';
     if (isRunning) label += '\n⟳ 执行中';
@@ -444,7 +460,7 @@ function renderMain() {
     const reason = wf?.awaiting_reason ?? '需要人审';
     const sceneLabels = { failure: '失败/异常', guardrail: '碰护栏', capability_gap: '能力缺口', checkpoint: '阶段检查点', anomaly: '状态异常' };
     el.innerHTML = '<div class="guide"><div class="guide-title" style="color:var(--warn)">需要人审: '+escapeHtml(sceneLabels[scene] || scene)+'</div><div class="guide-desc">'+escapeHtml(reason)+'</div>'+
-      '<div class="row"><button class="good" id="humanContinueBtn">继续执行</button><button class="secondary" id="humanRetryBtn">重试 '+escapeHtml(wf?.current_node||'')+'</button><button class="bad" id="humanAbortBtn">放弃</button></div>'+
+      '<div class="row"><button class="good" id="humanContinueBtn">继续执行</button><button class="secondary" id="humanRetryBtn">重试 '+escapeHtml(nodeLabel(wf?.current_node)||'')+'</button><button class="bad" id="humanAbortBtn">放弃</button></div>'+
       '<div style="margin-top:10px"><div class="muted" style="margin-bottom:4px">给调度大脑的方向指令(可选,持续影响后续调度):</div><textarea id="humanDirection" placeholder="例如:产出要纯净正文不要混入汇报文字,或者:第3章节奏太慢要加快"></textarea></div>'+
       '<div style="margin-top:8px"><div class="muted" style="margin-bottom:4px">手动编辑 blackboard(可选,JSON 格式):</div><textarea id="humanBbEdit" placeholder="例如: {&quot;summary&quot;:&quot;修改后的摘要&quot;}" style="min-height:50px"></textarea></div>'+
       '</div><div id="lastRunPanel" style="margin-top:12px"></div><div id="blackboardPanel" style="margin-top:12px"></div>';
@@ -497,7 +513,7 @@ function renderPlanOverview(containerId) {
     const checks = (cap.checks||[]).map(c => '<div class="task-meta">验收: ['+escapeHtml(c.method)+'] '+escapeHtml(c.desc)+'</div>').join('');
     const updates = cap.updates?.length ? '<div class="task-meta">更新记忆: '+escapeHtml(cap.updates.join(', '))+'</div>' : '';
     const instList = cap.instances?.length ? '<div class="task-meta">实例 ×'+cap.instances.length+': '+escapeHtml(cap.instances.join(' / '))+'</div>' : '<div class="task-meta">执行次数: 1次(一次性)</div>';
-    html += '<div class="task-card"><div class="task-row"><b>'+escapeHtml(cap.id)+'</b><span class="pill '+kindCls+'">'+escapeHtml(cap.kind)+'</span></div><div class="task-desc">'+escapeHtml(cap.desc)+'</div>'+instList+outputs+checks+updates+'</div>';
+    html += '<div class="task-card"><div class="task-row"><b>'+escapeHtml(nodeLabel(cap.id))+'</b><span class="pill '+kindCls+'">'+escapeHtml(cap.kind)+'</span></div><div class="task-desc">'+escapeHtml(cap.desc)+'</div>'+instList+outputs+checks+updates+'</div>';
   }
   html += '</div>';
   // 护栏
@@ -545,7 +561,7 @@ function renderTimelineBlocks(containerId) {
     // 头部
     html += '<div class="tl-head" style="padding:10px 12px;cursor:pointer;background:#0d1626" onclick="toggleBlock('+i+')">';
     html += '<span style="color:'+borderColor+';font-weight:bold">'+statusIcon+'</span> ';
-    html += '<span style="color:#e2e8f0">'+escapeHtml(b.desc || b.nodeId)+'</span>';
+    html += '<span style="color:#e2e8f0">'+escapeHtml(nodeFullDesc(b.nodeId) || b.desc || b.nodeId)+'</span>';
     html += ' <span style="color:#475569;font-size:12px">'+statusText+'</span>';
     if (b.runId) html += ' <span style="color:#334155;font-size:11px">'+escapeHtml(b.runId)+'</span>';
     html += '</div>';
