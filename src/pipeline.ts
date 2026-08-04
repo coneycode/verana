@@ -70,6 +70,7 @@ const COMPOSER_SYSTEM = `你是一个 workflow 规划者(Composer)。你的职�
 - 拿不准是硬还是软的,默认归 soft_guidance(宁可少锁不可锁错)
 - deliverable_contract:根据任务性质决定是否输出 required_sections/forbidden_patterns。只有任务明确需要特定章节结构时才写;不确定就不输出(留空)。不要硬套通用章节(如"结论与建议"不一定适用所有调研任务)
 - instances:所有节点都声明 instances 字段。可多次调度的节点(如按方案/章节/维度分别处理)列出实例清单;一次性节点留空数组[]。对于有非空 instances 的节点,blackboard_schema 里必须设计"{node_id}_remaining"字段(记录未完成实例,bounded=true)
+- instances 的目的和判定:instances 的目的是拆分长任务,保证每次 agent 执行的上下文短、聚焦单一子任务,提升成功率。同时支持精准重试(只重跑失败的实例,不重跑已完成的)。判定标准:如果一个节点的工作可以拆成多个独立子任务,每个子任务需要 agent 单独搜索/推理/写入(如收集一个维度的证据、写一个章节),用 instances,每次 scheduler 调一个实例。如果一次 agent 执行能完成所有产出(如审阅整篇报告),不用 instances。典型场景:按维度/方案/章节分别收集证据 → instances=["维度1","维度2",...];逐章写作 → instances=["第1章","第2章",...]。非典型场景:一次性写完整报告/审阅 → instances=[]
 - context_inputs:每个节点声明执行时需要参考的 blackboard 字段。只注入这个节点真正需要的字段(如收集证据节点只需看 evidence_index,不需要看 review_notes)。不填或留空数组=注入全量(兜底)。_remaining 字段是代码维护的不需要放进 context_inputs。context_inputs 里的字段名必须在 blackboard_schema.fields 里存在
 - entry_node 是调度大脑第一步选的节点(通常是最早的能力)
 - 用中文写 desc
