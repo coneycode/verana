@@ -19,9 +19,9 @@ export async function readEvents(solutionDir: string, afterSeq = 0): Promise<Eve
   } catch {
     return [];
   }
-  return raw.trim().split("\n")
+  return raw.trim() ? raw.trim().split("\n")
     .map((line) => JSON.parse(line) as EventEntry)
-    .filter((e) => e.seq > afterSeq);
+    .filter((e) => e.seq > afterSeq) : [];
 }
 
 export async function nextSeq(solutionDir: string): Promise<number> {

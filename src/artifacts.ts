@@ -226,21 +226,24 @@ export async function collectArtifacts(args: {
   runDir: string;
   runId: string;
   node: CapabilityNode;
+  instance?: string;
 }): Promise<ArtifactSnapshot> {
   const contracts = normalizeOutputContracts(args.node);
   const entries: ArtifactSnapshotEntry[] = [];
   await mkdir(join(args.runDir, "artifacts"), { recursive: true });
 
   for (const contract of contracts) {
-    const sourcePath = join(args.projectDir, contract.path);
-    const snapshotPath = join(args.runDir, "artifacts", normalize(contract.path));
+    // 替换 {instance} 占位符为实际 instance 名
+    const resolvedPath = args.instance ? contract.path.replace(/{instance}/g, args.instance) : contract.path;
+    const sourcePath = join(args.projectDir, resolvedPath);
+    const snapshotPath = join(args.runDir, "artifacts", normalize(resolvedPath));
     try {
       const sourceStat = await stat(sourcePath);
       await mkdir(dirname(snapshotPath), { recursive: true });
       if (sourceStat.isDirectory()) {
         await cp(sourcePath, snapshotPath, { recursive: true });
         entries.push({
-          declared_path: contract.path,
+          declared_path: resolvedPath,
           snapshot_path: snapshotPath,
           kind: "directory",
           exists: true,
@@ -251,7 +254,7 @@ export async function collectArtifacts(args: {
         await writeFile(snapshotPath, content);
         const text = content.toString("utf8");
         entries.push({
-          declared_path: contract.path,
+          declared_path: resolvedPath,
           snapshot_path: snapshotPath,
           kind: "file",
           exists: true,
@@ -263,7 +266,7 @@ export async function collectArtifacts(args: {
       }
     } catch {
       entries.push({
-        declared_path: contract.path,
+        declared_path: resolvedPath,
         snapshot_path: snapshotPath,
         kind: contract.kind ?? "file",
         exists: false,
@@ -287,6 +290,7 @@ export async function validateArtifactContract(args: {
   projectDir?: string;
   deliverableType?: DeliverableType;
   deliverableContract?: DeliverableContract;
+  instance?: string;
 }): Promise<ArtifactReport> {
   const outputs: ArtifactOutputReport[] = [];
   let pathFailures: ArtifactFailure[] = [];
@@ -303,11 +307,12 @@ export async function validateArtifactContract(args: {
   }
 
   for (const contract of contracts) {
-    const entry = args.snapshot.entries.find((e) => e.declared_path === contract.path);
+    const resolvedPath = args.instance ? contract.path.replace(/{instance}/g, args.instance) : contract.path;
+    const entry = args.snapshot.entries.find((e) => e.declared_path === resolvedPath);
     const failures: ArtifactFailure[] = [...validateRelativeOutputPath(contract.path)];
     if (!entry || !entry.exists) {
-      if (contract.required !== false) failures.push({ code: "declared_output_missing", message: `declared output missing: ${contract.path}` });
-      outputs.push({ declared_path: contract.path, snapshot_path: entry?.snapshot_path, exists: false, status: failures.length ? "failed" : "passed", failures });
+      if (contract.required !== false) failures.push({ code: "declared_output_missing", message: `declared output missing: ${resolvedPath}` });
+      outputs.push({ declared_path: resolvedPath, snapshot_path: entry?.snapshot_path, exists: false, status: failures.length ? "failed" : "passed", failures });
       continue;
     }
 
@@ -316,21 +321,21 @@ export async function validateArtifactContract(args: {
       const textBytes = Buffer.byteLength(text, "utf8");
       const lineCount = countLines(text);
       if (contract.required !== false && text.trim().length === 0) {
-        failures.push({ code: "declared_output_empty", message: `declared output directory has no readable deliverable files: ${contract.path}` });
+        failures.push({ code: "declared_output_empty", message: `declared output directory has no readable deliverable files: ${resolvedPath}` });
       }
       const minBytes = Math.max(contract.min_bytes ?? 200, 20);
       if (textBytes > 0 && textBytes < minBytes) {
-        failures.push({ code: "declared_output_too_small", message: `declared output directory content is too small: ${contract.path} (${textBytes} bytes < ${minBytes})` });
+        failures.push({ code: "declared_output_too_small", message: `declared output directory content is too small: ${resolvedPath} (${textBytes} bytes < ${minBytes})` });
       }
       if ((contract.min_lines ?? 0) > 0 && lineCount < (contract.min_lines ?? 0)) {
-        failures.push({ code: "declared_output_too_small", message: `declared output directory content has too few lines: ${contract.path} (${lineCount} lines < ${contract.min_lines})` });
+        failures.push({ code: "declared_output_too_small", message: `declared output directory content has too few lines: ${resolvedPath} (${lineCount} lines < ${contract.min_lines})` });
       }
       failures.push(...validateLookalikes(contract, text));
       if ((contract.role ?? "deliverable") === "deliverable" && args.deliverableType && text.trim()) {
         failures.push(...validateStructureByType(text, args.deliverableType, args.deliverableContract, contract));
       }
       outputs.push({
-        declared_path: contract.path,
+        declared_path: resolvedPath,
         snapshot_path: entry.snapshot_path,
         exists: true,
         is_directory: true,
@@ -344,14 +349,14 @@ export async function validateArtifactContract(args: {
 
     const text = await readArtifactText(entry);
     if (entry.size_bytes === 0) {
-      failures.push({ code: "declared_output_empty", message: `declared output is empty: ${contract.path}` });
+      failures.push({ code: "declared_output_empty", message: `declared output is empty: ${resolvedPath}` });
     }
     const minBytes = Math.max(contract.min_bytes ?? 200, 20);
     if (entry.size_bytes > 0 && entry.size_bytes < minBytes) {
-      failures.push({ code: "declared_output_too_small", message: `declared output is too small: ${contract.path} (${entry.size_bytes} bytes < ${minBytes})` });
+      failures.push({ code: "declared_output_too_small", message: `declared output is too small: ${resolvedPath} (${entry.size_bytes} bytes < ${minBytes})` });
     }
     if ((contract.min_lines ?? 0) > 0 && (entry.line_count ?? 0) < (contract.min_lines ?? 0)) {
-      failures.push({ code: "declared_output_too_small", message: `declared output has too few lines: ${contract.path} (${entry.line_count ?? 0} lines < ${contract.min_lines})` });
+      failures.push({ code: "declared_output_too_small", message: `declared output has too few lines: ${resolvedPath} (${entry.line_count ?? 0} lines < ${contract.min_lines})` });
     }
     failures.push(...validateFormat(contract, text));
     failures.push(...validateLookalikes(contract, text));
@@ -360,7 +365,7 @@ export async function validateArtifactContract(args: {
     }
 
     outputs.push({
-      declared_path: contract.path,
+      declared_path: resolvedPath,
       snapshot_path: entry.snapshot_path,
       exists: true,
       is_file: true,

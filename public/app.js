@@ -562,6 +562,7 @@ function renderTimelineBlocks(containerId) {
     html += '<div class="tl-head" style="padding:10px 12px;cursor:pointer;background:#0d1626" onclick="toggleBlock('+i+')">';
     html += '<span style="color:'+borderColor+';font-weight:bold">'+statusIcon+'</span> ';
     html += '<span style="color:#e2e8f0">'+escapeHtml(nodeFullDesc(b.nodeId) || b.desc || b.nodeId)+'</span>';
+    if (b.instance) html += ' <span style="color:#fcd34d;font-size:12px;font-weight:bold">['+escapeHtml(b.instance)+']</span>';
     html += ' <span style="color:#475569;font-size:12px">'+statusText+'</span>';
     if (b.runId) html += ' <span style="color:#334155;font-size:11px">'+escapeHtml(b.runId)+'</span>';
     html += '</div>';
@@ -629,7 +630,7 @@ function rebuildTimelineFromEvents(events) {
       const runId = e.run_id || '';
       const existing = timelineBlocks.find(b => b.nodeId === nodeId && b.status === 'running');
       if (existing) { existing.status = 'failed'; }
-      timelineBlocks.push({ nodeId, desc, runId, status: 'running', reason: e.reason || '', llmOutput: '', _expanded: false });
+      timelineBlocks.push({ nodeId, desc, runId, status: 'running', reason: e.reason || '', instance: e.instance || '', llmOutput: '', _expanded: false });
     } else if (e.type === 'run_created') {
       // 只更新已有 block 的 runId
       const running = [...timelineBlocks].reverse().find(b => b.nodeId === e.node && b.status === 'running');
@@ -682,7 +683,7 @@ function updateBlockFromSSE(eventType, payload) {
     if (existing) {
       existing.status = 'failed';
     }
-    timelineBlocks.push({ nodeId, desc, runId, status: 'running', reason: payload.reason || '', llmOutput: '', _expanded: false });
+    timelineBlocks.push({ nodeId, desc, runId, status: 'running', reason: payload.reason || '', instance: payload.instance || '', llmOutput: '', _expanded: false });
   } else if (eventType === 'llm_stream') {
     // LLM 输出追加到正在执行的 block
     const r = running || timelineBlocks[timelineBlocks.length - 1];

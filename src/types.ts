@@ -139,6 +139,7 @@ export interface EventEntry {
   node?: string;
   run_id?: string;
   reason?: string;          // 调度理由/护栏原因/人审原因
+  instance?: string;        // scheduler 选的实例(有 instances 的节点)
   data?: Record<string, unknown>;
 }
 

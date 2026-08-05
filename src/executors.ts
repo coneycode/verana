@@ -25,7 +25,7 @@ export interface ExecutorAdapter {
   capabilities: CapabilityDecl;
   probe(): Promise<ProbeResult>;
   /** 在 workdir 启动 executor 跑一个重节点。prompt 是完整指令(含上下文)。返回 agent 产出 */
-  execute(prompt: string, workdir: string, opts?: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number; onOutputLine?: (line: string) => void }): Promise<AgentRun>;
+  execute(prompt: string, workdir: string, opts?: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number; maxReruns?: number; onOutputLine?: (line: string) => void }): Promise<AgentRun>;
 }
 
 export class HermesAdapter implements ExecutorAdapter {
@@ -49,7 +49,32 @@ export class HermesAdapter implements ExecutorAdapter {
     return { available: true, command: this.command, reason: "PATH lookup deferred to process spawn" };
   }
 
-  async execute(prompt: string, workdir: string, opts: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number; onOutputLine?: (line: string) => void } = {}): Promise<AgentRun> {
+  async execute(prompt: string, workdir: string, opts: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number; maxReruns?: number; onOutputLine?: (line: string) => void } = {}): Promise<AgentRun> {
+    const maxReruns = opts.maxReruns ?? 3;
+    let lastResult: AgentRun | null = null;
+
+    for (let attempt = 0; attempt < maxReruns; attempt++) {
+      lastResult = await this._executeOnce(prompt, workdir, opts);
+
+      // 检测 429 限流:hermes 内部重试3次后放弃,raw 里有 RateLimitError / 429
+      const hit429 = lastResult.raw.includes("RateLimitError")
+        || lastResult.raw.includes("Rate limited after")
+        || lastResult.raw.includes("HTTP 429");
+
+      if (!hit429) return lastResult;
+
+      // 429 命中:等 60s 再重跑整个 executor
+      const isLast = attempt === maxReruns - 1;
+      if (isLast) break;
+
+      opts.onOutputLine?.(`⚠️ 429 限流,等待 60 秒后重试 executor (attempt ${attempt + 1}/${maxReruns})...`);
+      await new Promise(r => setTimeout(r, 60_000));
+    }
+
+    return lastResult!;
+  }
+
+  private async _executeOnce(prompt: string, workdir: string, opts: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number; maxReruns?: number; onOutputLine?: (line: string) => void }): Promise<AgentRun> {
     const maxTurns = opts.maxTurns ?? 90;
     const timeoutMs = opts.timeoutMs ?? 600_000;
     const toolsets = opts.toolsets ?? ["web"];

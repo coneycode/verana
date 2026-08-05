@@ -51,8 +51,11 @@ interface MaterializerResult {
   skipped_reason?: string;
 }
 
-export function isMaterializableReport(report: ArtifactReport, outputs: OutputContract[]): boolean {
-  const outputByPath = new Map(outputs.map((output) => [output.path, output]));
+export function isMaterializableReport(report: ArtifactReport, outputs: OutputContract[], instance?: string): boolean {
+  const outputByPath = new Map(outputs.map((output) => {
+    const p = instance ? output.path.replace(/{instance}/g, instance) : output.path;
+    return [p, output];
+  }));
   return report.outputs.some((output) => {
     const contract = outputByPath.get(output.declared_path);
     if (!contract || contract.materializable === false || (contract.role ?? "deliverable") !== "deliverable") return false;
@@ -70,20 +73,22 @@ export async function materializeArtifacts(args: {
   deliverableType: DeliverableType;
   deliverableContract?: DeliverableContract;
   instruction: string;
+  instance?: string;
 }): Promise<MaterializationReport> {
   const outputs = normalizeOutputContracts(args.node);
   const targets = outputs.filter((output) => output.materializable !== false && (output.role ?? "deliverable") === "deliverable");
+  const resolvePath = (p: string) => args.instance ? p.replace(/{instance}/g, args.instance) : p;
   const baseReport: MaterializationReport = {
     attempted: false,
     passed: false,
     run_id: args.snapshot.run_id,
     node_id: args.snapshot.node_id,
-    targets: targets.map((target) => target.path),
+    targets: targets.map((target) => resolvePath(target.path)),
     written: [],
     source_summary: ["claim.md", "stream.md", "artifact snapshot", "node inputs"],
   };
 
-  if (!targets.length || !isMaterializableReport(args.report, outputs)) {
+  if (!targets.length || !isMaterializableReport(args.report, outputs, args.instance)) {
     return { ...baseReport, skipped_reason: "no materializable deliverable outputs or failures" };
   }
 
@@ -98,7 +103,7 @@ export async function materializeArtifacts(args: {
     renderDeliverableContract(contract),
     "",
     "声明 output 目标:",
-    ...targets.map((target) => `- ${target.path}: ${target.desc}`),
+    ...targets.map((target) => `- ${resolvePath(target.path)}: ${target.desc}`),
     "",
     "本次 artifact contract 失败:",
     stringify(args.report),
@@ -122,7 +127,7 @@ export async function materializeArtifacts(args: {
   ].join("\n");
 
   const result = await args.client.completeJson<MaterializerResult>("evaluator", MATERIALIZER_SYSTEM, userPrompt);
-  const allowed = new Set(targets.map((target) => target.path));
+  const allowed = new Set(targets.map((target) => resolvePath(target.path)));
   const written: string[] = [];
   for (const artifact of result.artifacts ?? []) {
     if (!allowed.has(artifact.path) || !artifact.content?.trim()) continue;
