@@ -462,8 +462,11 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     "",
     outputsList ? `产出文件路径(必须写到这些路径):\\n${outputsList}` : "",
     "",
-    node.kind === "agent" ? deliverableContractText : "",
-    node.kind === "agent" ? "必须把正式交付物正文写入声明 output 路径；不要把执行过程、工具日志、claim、完成自述写进交付物。" : "",
+    // 交付物结构要求只给产出最终交付物的节点(无 instance 的 agent 节点)
+    // 有 instance 的节点是分维度收集,不应该按最终交付物结构写
+    (!instance && node.kind === "agent") ? deliverableContractText : "",
+    (!instance && node.kind === "agent") ? "必须把正式交付物正文写入声明 output 路径；不要把执行过程、工具日志、claim、完成自述写进交付物。" : "",
+    instance && node.kind === "agent" ? "产出文件只需聚焦本次实例维度的证据,不要按最终交付物结构(多章节)写,不要覆盖其他维度的内容。" : "",
     "",
     node.kind === "agent" ? [
       "执行约束:",
