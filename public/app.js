@@ -32,10 +32,10 @@ function buildCapabilityGraph(spec) {
   if (!spec || !spec.capabilities) return '';
   const caps = spec.capabilities;
   let lines = ['flowchart TD'];
-  lines.push('  classDef agent fill:#1a2744,stroke:#3b82f6,color:#93c5fd');
-  lines.push('  classDef light fill:#1a2a1a,stroke:#22c55e,color:#86efac');
-  lines.push('  classDef entry fill:#1a1f2e,stroke:#f59e0b,color:#fcd34d,stroke-width:2px');
-  lines.push('  classDef instance fill:#0d1626,stroke:#475569,color:#94a3b8');
+  lines.push('  classDef agent fill:rgba(99,102,241,0.15),stroke:#6366f1,color:#818cf8');
+  lines.push('  classDef light fill:rgba(34,197,94,0.15),stroke:#22c55e,color:#86efac');
+  lines.push('  classDef entry fill:rgba(245,158,11,0.15),stroke:#f59e0b,color:#fcd34d,stroke-width:2px');
+  lines.push('  classDef instance fill:rgba(255,255,255,0.04),stroke:#71717a,color:#a1a1aa');
 
   // 画节点 + 实例子节点
   for (const c of caps) {
@@ -109,9 +109,9 @@ function buildExecutionGraph(spec, wf) {
   // 从事件日志的实际执行顺序推断边:如果 A 执行完后 B 接着执行,A→B 画一条边
   // 但我们这里没有事件日志的顺序信息(只有 runs),所以只画节点不画边
   let lines = ['flowchart TD'];
-  lines.push('  classDef passed fill:#142a1a,stroke:#22c55e,color:#86efac');
-  lines.push('  classDef failed fill:#2a1414,stroke:#ef4444,color:#fca5a5');
-  lines.push('  classDef running fill:#1a1f2e,stroke:#f59e0b,color:#fcd34d,stroke-width:3px');
+  lines.push('  classDef passed fill:rgba(34,197,94,0.15),stroke:#22c55e,color:#86efac');
+  lines.push('  classDef failed fill:rgba(239,68,68,0.15),stroke:#ef4444,color:#fca5a5');
+  lines.push('  classDef running fill:rgba(245,158,11,0.15),stroke:#f59e0b,color:#fcd34d,stroke-width:3px');
   for (const c of caps) {
     const nodeRuns = runs[c.id] ?? [];
     const runCount = nodeRuns.length;
@@ -551,27 +551,27 @@ function renderTimelineBlocks(containerId) {
     const isRunning = b.status === 'running';
     const isFailed = b.status === 'failed';
     const isPassed = b.status === 'passed';
-    const borderColor = isRunning ? '#f59e0b' : isFailed ? '#ef4444' : isPassed ? '#22c55e' : '#475569';
+    const borderColor = isRunning ? 'var(--warn)' : isFailed ? 'var(--bad)' : isPassed ? 'var(--ok)' : 'var(--text-muted)';
     const statusIcon = isRunning ? '⟳' : isFailed ? '✗' : isPassed ? '✓' : '○';
     const statusText = isRunning ? '执行中' : isFailed ? '失败' : isPassed ? '通过' : '等待';
     // 正在执行和失败的块默认展开,通过的默认折叠
     const expanded = isRunning || isFailed || b._expanded;
 
-    html += '<div class="tl-block" style="border:1px solid '+borderColor+';border-radius:8px;margin-bottom:8px;padding:0;overflow:hidden">';
+    html += '<div class="tl-block">';
     // 头部
-    html += '<div class="tl-head" style="padding:10px 12px;cursor:pointer;background:#0d1626" onclick="toggleBlock('+i+')">';
-    html += '<span style="color:'+borderColor+';font-weight:bold">'+statusIcon+'</span> ';
-    html += '<span style="color:#e2e8f0">'+escapeHtml(nodeFullDesc(b.nodeId) || b.desc || b.nodeId)+'</span>';
-    if (b.instance) html += ' <span style="color:#fcd34d;font-size:12px;font-weight:bold">['+escapeHtml(b.instance)+']</span>';
-    html += ' <span style="color:#475569;font-size:12px">'+statusText+'</span>';
-    if (b.runId) html += ' <span style="color:#334155;font-size:11px">'+escapeHtml(b.runId)+'</span>';
+    html += '<div class="tl-head" onclick="toggleBlock('+i+')">';
+    html += '<span style="color:'+borderColor+';font-weight:600;font-size:14px">'+statusIcon+'</span> ';
+    html += '<span style="color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(nodeFullDesc(b.nodeId) || b.desc || b.nodeId)+'</span>';
+    if (b.instance) html += ' <span style="color:var(--warn);font-size:12px;font-weight:500">['+escapeHtml(b.instance)+']</span>';
+    html += ' <span style="color:'+borderColor+';font-size:12px;font-weight:500">'+statusText+'</span>';
+    if (b.runId) html += ' <span class="muted" style="font-size:11px">'+escapeHtml(b.runId)+'</span>';
     html += '</div>';
     // 内容(展开时显示)
     if (expanded) {
-      html += '<div class="tl-body" style="padding:8px 12px;border-top:1px solid #1f2d46">';
-      if (b.reason) html += '<div class="tl-reason" style="color:#64748b;font-size:13px;margin-bottom:6px">调度理由: '+escapeHtml(b.reason)+'</div>';
+      html += '<div class="tl-body">';
+      if (b.reason) html += '<div class="tl-reason">调度理由: '+escapeHtml(b.reason)+'</div>';
       if (b.llmOutput) {
-        html += '<div class="tl-llm" style="background:#050b17;border-radius:6px;padding:8px;margin-bottom:6px;max-height:300px;overflow:auto;font-size:13px;white-space:pre-wrap;word-break:break-word;color:#dbeafe">'+escapeHtml(b.llmOutput)+'</div>';
+        html += '<div class="tl-llm">'+escapeHtml(b.llmOutput)+'</div>';
       }
       if (b.artifactCollected) {
         html += '<div style="color:#64748b;font-size:13px;margin-bottom:4px">📦 产物收集完成</div>';
