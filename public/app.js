@@ -7,7 +7,7 @@ let workflowSpec = null;
 let activeRunId = null;
 
 // Mermaid 初始化
-if (typeof mermaid !== 'undefined') { mermaid.initialize({ startOnLoad: false, theme: 'dark', flowchart: { curve: 'basis' } }); }
+if (typeof mermaid !== 'undefined') { mermaid.initialize({ startOnLoad: false, theme: 'default', flowchart: { curve: 'basis' } }); }
 
 // 从 spec 查 capability 的中文短名(优先 name,fallback desc 前12字,再 fallback id)
 function nodeLabel(nodeId) {
@@ -32,10 +32,10 @@ function buildCapabilityGraph(spec) {
   if (!spec || !spec.capabilities) return '';
   const caps = spec.capabilities;
   let lines = ['flowchart TD'];
-  lines.push('  classDef agent fill:rgba(99,102,241,0.15),stroke:#6366f1,color:#818cf8');
-  lines.push('  classDef light fill:rgba(34,197,94,0.15),stroke:#22c55e,color:#86efac');
-  lines.push('  classDef entry fill:rgba(245,158,11,0.15),stroke:#f59e0b,color:#fcd34d,stroke-width:2px');
-  lines.push('  classDef instance fill:rgba(255,255,255,0.04),stroke:#71717a,color:#a1a1aa');
+  lines.push('  classDef agent fill:#eef0ff,stroke:var(--accent),color:var(--accent)');
+  lines.push('  classDef light fill:#f0fdf4,stroke:var(--ok),color:var(--ok)');
+  lines.push('  classDef entry fill:#fffbeb,stroke:var(--warn),color:var(--warn),stroke-width:2px');
+  lines.push('  classDef instance fill:var(--surface-hover),stroke:var(--border-strong),color:var(--text-secondary)');
 
   // 画节点 + 实例子节点
   for (const c of caps) {
@@ -109,9 +109,9 @@ function buildExecutionGraph(spec, wf) {
   // 从事件日志的实际执行顺序推断边:如果 A 执行完后 B 接着执行,A→B 画一条边
   // 但我们这里没有事件日志的顺序信息(只有 runs),所以只画节点不画边
   let lines = ['flowchart TD'];
-  lines.push('  classDef passed fill:rgba(34,197,94,0.15),stroke:#22c55e,color:#86efac');
-  lines.push('  classDef failed fill:rgba(239,68,68,0.15),stroke:#ef4444,color:#fca5a5');
-  lines.push('  classDef running fill:rgba(245,158,11,0.15),stroke:#f59e0b,color:#fcd34d,stroke-width:3px');
+  lines.push('  classDef passed fill:#f0fdf4,stroke:var(--ok),color:var(--ok)');
+  lines.push('  classDef failed fill:#fef2f2,stroke:var(--bad),color:var(--bad)');
+  lines.push('  classDef running fill:#fffbeb,stroke:var(--warn),color:var(--warn),stroke-width:3px');
   for (const c of caps) {
     const nodeRuns = runs[c.id] ?? [];
     const runCount = nodeRuns.length;
@@ -387,7 +387,7 @@ function renderMain() {
         const isInput = b.step === 'llm_input';
         const isOutput = b.step === 'llm_output';
         const isResult = b.step === 'sufficiency_result';
-        const color = isInput ? '#3b82f6' : isOutput ? '#22c55e' : isResult ? '#a78bfa' : '#64748b';
+        const color = isInput ? 'var(--accent)' : isOutput ? 'var(--ok)' : isResult ? 'var(--accent-hover)' : 'var(--text-muted)';
         const label = b.step === 'composing' ? 'Composer 生成' :
                       b.step === 'llm_input' ? 'LLM 输入' :
                       b.step === 'llm_output' ? 'LLM 输出' :
@@ -397,13 +397,13 @@ function renderMain() {
                       b.step === 'hard_check_failed' ? '硬校验未通过' :
                       b.step === 'done' ? '规划完成' : b.step;
         html += '<div style="border:1px solid ' + color + ';border-radius:6px;margin-bottom:6px;overflow:hidden">';
-        html += '<div style="padding:6px 10px;background:#0d1626;cursor:pointer;color:' + color + ';font-size:13px;font-weight:bold" onclick="this.parentElement.querySelector(\'.pb-body\').style.display = this.parentElement.querySelector(\'.pb-body\').style.display === \'none\' ? \'block\' : \'none\'">' + escapeHtml(label) + '</div>';
+        html += '<div style="padding:6px 10px;background:var(--surface-hover);cursor:pointer;color:' + color + ';font-size:13px;font-weight:bold" onclick="this.parentElement.querySelector(\'.pb-body\').style.display = this.parentElement.querySelector(\'.pb-body\').style.display === \'none\' ? \'block\' : \'none\'">' + escapeHtml(label) + '</div>';
         if (b.content) {
-          html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;white-space:pre-wrap;word-break:break-word;color:#dbeafe;max-height:400px;overflow:auto;background:#050b17">' + escapeHtml(b.content) + '</div>';
+          html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid var(--border);font-size:13px;white-space:pre-wrap;word-break:break-word;color:var(--text-secondary);max-height:400px;overflow:auto;background:var(--bg)">' + escapeHtml(b.content) + '</div>';
         } else if (b.message) {
-          html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;color:#dbeafe">' + escapeHtml(b.message) + '</div>';
+          html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid var(--border);font-size:13px;color:var(--text-secondary)">' + escapeHtml(b.message) + '</div>';
         } else {
-          html += '<div class="pb-body" style="display:none;padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;color:#64748b">(无内容)</div>';
+          html += '<div class="pb-body" style="display:none;padding:8px 10px;border-top:1px solid var(--border);font-size:13px;color:var(--text-muted)">(无内容)</div>';
         }
         html += '</div>';
       }
@@ -426,7 +426,7 @@ function renderMain() {
     renderPlanOverview('planOverview');
     // 能力关系图 + 图例
     const graphDef = buildCapabilityGraph(workflowSpec);
-    let legendHtml = '<div style="margin-top:8px;font-size:12px;color:#64748b;line-height:1.6">';
+    let legendHtml = '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.6">';
     legendHtml += '<b>图例:</b> ';
     legendHtml += '实线 → 顺序路径(可能执行顺序) · ';
     legendHtml += '虚线 -.retry.-> 节点可被 scheduler 重试 · ';
@@ -574,28 +574,28 @@ function renderTimelineBlocks(containerId) {
         html += '<div class="tl-llm">'+escapeHtml(b.llmOutput)+'</div>';
       }
       if (b.artifactCollected) {
-        html += '<div style="color:#64748b;font-size:13px;margin-bottom:4px">📦 产物收集完成</div>';
+        html += '<div style="color:var(--text-muted);font-size:13px;margin-bottom:4px">📦 产物收集完成</div>';
       }
       if (b.artifactValidated === false) {
         const codes = b.artifactFailures?.length ? ' ('+b.artifactFailures.join(', ')+')' : '';
-        html += '<div style="color:#ef4444;font-size:13px;margin-bottom:4px">⚠️ 产物契约失败'+escapeHtml(codes)+'</div>';
+        html += '<div style="color:var(--bad);font-size:13px;margin-bottom:4px">⚠️ 产物契约失败'+escapeHtml(codes)+'</div>';
       } else if (b.artifactValidated === true) {
-        html += '<div style="color:#22c55e;font-size:13px;margin-bottom:4px">✅ 产物契约通过</div>';
+        html += '<div style="color:var(--ok);font-size:13px;margin-bottom:4px">✅ 产物契约通过</div>';
       }
       if (b.materialized) {
         const paths = b.materializedPaths?.length ? ' — '+escapeHtml(b.materializedPaths.join(', ')) : '';
-        html += '<div style="color:#f59e0b;font-size:13px;margin-bottom:4px">🔧 兜底修复: materializer 已生成正式产物'+paths+'</div>';
+        html += '<div style="color:var(--warn);font-size:13px;margin-bottom:4px">🔧 兜底修复: materializer 已生成正式产物'+paths+'</div>';
       }
       if (b.materializationFailed) {
         const reason = b.materializationReason ? ' — '+escapeHtml(b.materializationReason) : '';
-        html += '<div style="color:#ef4444;font-size:13px;margin-bottom:4px">🔧 兜底修复失败'+reason+'</div>';
+        html += '<div style="color:var(--bad);font-size:13px;margin-bottom:4px">🔧 兜底修复失败'+reason+'</div>';
       }
       if (b.verdict) {
         const pass = b.verdict.passed;
-        html += '<div style="color:'+(pass?'#22c55e':'#ef4444')+';font-size:13px;margin-bottom:4px">'+(pass?'✅':'❌')+' 验证: '+(pass?'通过':'未通过')+(b.verdict.reasons?.length?' — '+escapeHtml(b.verdict.reasons[0].slice(0,80)):'')+'</div>';
+        html += '<div style="color:'+(pass?'var(--ok)':'var(--bad)')+';font-size:13px;margin-bottom:4px">'+(pass?'✅':'❌')+' 验证: '+(pass?'通过':'未通过')+(b.verdict.reasons?.length?' — '+escapeHtml(b.verdict.reasons[0].slice(0,80)):'')+'</div>';
       }
       if (b.diagnosis) {
-        html += '<div style="color:#a78bfa;font-size:13px;margin-bottom:4px">🔬 归因: '+escapeHtml(b.diagnosis.root_cause)+' — '+escapeHtml((b.diagnosis.explanation||'').slice(0,80))+'</div>';
+        html += '<div style="color:var(--accent-hover);font-size:13px;margin-bottom:4px">🔬 归因: '+escapeHtml(b.diagnosis.root_cause)+' — '+escapeHtml((b.diagnosis.explanation||'').slice(0,80))+'</div>';
       }
       if (b.llmOutput && isRunning) {
         // 实时输出自动滚到底(在 renderTimelineBlocks 末尾统一处理)
@@ -877,7 +877,7 @@ async function loadDeliverables() {
   try {
     const files = await api('/projects/'+selectedId+'/deliverables');
     if (!files.length) { el.innerHTML = '<div class="muted">暂无交付物。</div>'; return; }
-    el.innerHTML = files.map(f => '<div style="margin-bottom:12px"><div class="qa-q">'+escapeHtml(f.path)+'</div><div class="md-content" style="background:#050b17;border:1px solid #1f2d46;border-radius:8px;padding:12px;max-height:400px;overflow:auto">'+markdownToHtml(f.content)+'</div></div>').join('');
+    el.innerHTML = files.map(f => '<div style="margin-bottom:12px"><div class="qa-q">'+escapeHtml(f.path)+'</div><div class="md-content" style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:12px;max-height:400px;overflow:auto">'+markdownToHtml(f.content)+'</div></div>').join('');
   } catch(e) { el.innerHTML = '<div class="muted">加载失败: '+escapeHtml(e.message)+'</div>'; }
 }
 
@@ -1097,7 +1097,7 @@ function connectEvents() {
               const isInput = b.step === 'llm_input';
               const isOutput = b.step === 'llm_output';
               const isResult = b.step === 'sufficiency_result';
-              const color = isInput ? '#3b82f6' : isOutput ? '#22c55e' : isResult ? '#a78bfa' : '#64748b';
+              const color = isInput ? 'var(--accent)' : isOutput ? 'var(--ok)' : isResult ? 'var(--accent-hover)' : 'var(--text-muted)';
               const label = b.step === 'composing' ? 'Composer 生成' :
                             b.step === 'llm_input' ? 'LLM 输入' :
                             b.step === 'llm_output' ? 'LLM 输出' :
@@ -1107,13 +1107,13 @@ function connectEvents() {
                             b.step === 'hard_check_failed' ? '硬校验未通过' :
                             b.step === 'done' ? '规划完成' : b.step;
               html += '<div style="border:1px solid ' + color + ';border-radius:6px;margin-bottom:6px;overflow:hidden">';
-              html += '<div style="padding:6px 10px;background:#0d1626;cursor:pointer;color:' + color + ';font-size:13px;font-weight:bold" onclick="var body=this.parentElement.querySelector(\'.pb-body\');body.style.display=body.style.display===\'none\'?\'block\':\'none\'">' + escapeHtml(label) + '</div>';
+              html += '<div style="padding:6px 10px;background:var(--surface-hover);cursor:pointer;color:' + color + ';font-size:13px;font-weight:bold" onclick="var body=this.parentElement.querySelector(\'.pb-body\');body.style.display=body.style.display===\'none\'?\'block\':\'none\'">' + escapeHtml(label) + '</div>';
               if (b.content) {
-                html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;white-space:pre-wrap;word-break:break-word;color:#dbeafe;max-height:400px;overflow:auto;background:#050b17">' + escapeHtml(b.content) + '</div>';
+                html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid var(--border);font-size:13px;white-space:pre-wrap;word-break:break-word;color:var(--text-secondary);max-height:400px;overflow:auto;background:var(--bg)">' + escapeHtml(b.content) + '</div>';
               } else if (b.message) {
-                html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;color:#dbeafe">' + escapeHtml(b.message) + '</div>';
+                html += '<div class="pb-body" style="padding:8px 10px;border-top:1px solid var(--border);font-size:13px;color:var(--text-secondary)">' + escapeHtml(b.message) + '</div>';
               } else {
-                html += '<div class="pb-body" style="display:none;padding:8px 10px;border-top:1px solid #1f2d46;font-size:13px;color:#64748b">(无内容)</div>';
+                html += '<div class="pb-body" style="display:none;padding:8px 10px;border-top:1px solid var(--border);font-size:13px;color:var(--text-muted)">(无内容)</div>';
               }
               html += '</div>';
             }
@@ -1146,7 +1146,7 @@ function markdownToHtml(md) {
   var blocks = [];
   var codeRe = new RegExp(BT+BT+BT+'(\\w*)\\n?([\\s\\S]*?)'+BT+BT+BT, 'g');
   s = s.replace(codeRe, function(m, lang, code) {
-    blocks.push('<pre style="background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:10px;overflow:auto;font-size:12px">'+code.trim()+'</pre>');
+    blocks.push('<pre style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;overflow:auto;font-size:12px">'+code.trim()+'</pre>');
     return '\u0000CODEBLOCK'+(blocks.length-1)+'\u0000';
   });
   // Tables: consecutive lines starting with |
@@ -1157,10 +1157,10 @@ function markdownToHtml(md) {
     var isSep = rows.length > 1 && rows[1].every(function(c){return /^[-:]+$/.test(c);});
     var html = '<table style="width:100%;border-collapse:collapse;font-size:13px;margin:8px 0">';
     if (isSep) {
-      html += '<tr>' + rows[0].map(function(c){return '<th style="border:1px solid #30363d;padding:6px 8px;text-align:left;background:#161b22">'+c+'</th>';}).join('') + '</tr>';
-      for (var i=2; i<rows.length; i++) { html += '<tr>' + rows[i].map(function(c){return '<td style="border:1px solid #30363d;padding:6px 8px">'+c+'</td>';}).join('') + '</tr>'; }
+      html += '<tr>' + rows[0].map(function(c){return '<th style="border:1px solid var(--border);padding:6px 8px;text-align:left;background:var(--surface-hover)">'+c+'</th>';}).join('') + '</tr>';
+      for (var i=2; i<rows.length; i++) { html += '<tr>' + rows[i].map(function(c){return '<td style="border:1px solid var(--border);padding:6px 8px">'+c+'</td>';}).join('') + '</tr>'; }
     } else {
-      for (var r=0; r<rows.length; r++) { html += '<tr>' + rows[r].map(function(c,idx){return '<td style="border:1px solid #30363d;padding:6px 8px;'+(idx===0?'font-weight:600':'')+'">'+c+'</td>';}).join('') + '</tr>'; }
+      for (var r=0; r<rows.length; r++) { html += '<tr>' + rows[r].map(function(c,idx){return '<td style="border:1px solid var(--border);padding:6px 8px;'+(idx===0?'font-weight:600':'')+'">'+c+'</td>';}).join('') + '</tr>'; }
     }
     return html + '</table>';
   });
@@ -1179,9 +1179,9 @@ function markdownToHtml(md) {
     else if (/^## (.+)/.test(line)) { closeLists(); closeBq(); result.push('<h2>'+line.replace(/^## /,'')+'</h2>'); }
     else if (/^# (.+)/.test(line)) { closeLists(); closeBq(); result.push('<h1>'+line.replace(/^# /,'')+'</h1>'); }
     // Horizontal rule
-    else if (/^---+$/.test(line.trim())) { closeLists(); closeBq(); result.push('<hr style="border:none;border-top:1px solid #30363d;margin:10px 0"/>'); }
+    else if (/^---+$/.test(line.trim())) { closeLists(); closeBq(); result.push('<hr style="border:none;border-top:1px solid var(--border);margin:10px 0"/>'); }
     // Blockquote (escaped > becomes &gt;)
-    else if (/^[&]gt; (.+)/.test(line)) { closeLists(); if(!inBq){result.push('<blockquote style="border-left:3px solid #3b82f6;padding-left:12px;margin:8px 0;color:#94a3b8">');inBq=true;} result.push('<p style="margin:2px 0">'+line.replace(/^[&]gt; /,'')+'</p>'); }
+    else if (/^[&]gt; (.+)/.test(line)) { closeLists(); if(!inBq){result.push('<blockquote style="border-left:3px solid var(--accent);padding-left:12px;margin:8px 0;color:var(--text-secondary)">');inBq=true;} result.push('<p style="margin:2px 0">'+line.replace(/^[&]gt; /,'')+'</p>'); }
     // Unordered list
     else if (/^[\-*] (.+)/.test(line)) { closeBq(); if(inOl){result.push('</ol>');inOl=false;} if(!inUl){result.push('<ul>');inUl=true;} result.push('<li>'+line.replace(/^[\-*] /,'')+'</li>'); }
     // Ordered list
@@ -1199,7 +1199,7 @@ function markdownToHtml(md) {
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
   var inlineCodeRe = new RegExp(BT+'([^'+BT+']+)'+BT, 'g');
-  html = html.replace(inlineCodeRe, '<code style="background:#1e293b;padding:1px 4px;border-radius:3px;font-size:12px">$1</code>');
+  html = html.replace(inlineCodeRe, '<code style="background:var(--accent-bg);padding:1px 4px;border-radius:3px;font-size:12px">$1</code>');
   // Restore code blocks
   html = html.replace(/\u0000CODEBLOCK(\d+)\u0000/g, function(m, idx) { return blocks[parseInt(idx)]; });
   return html;

@@ -7,31 +7,30 @@ export function renderHomePage(): string {
   <title>Verana</title>
   <style>
     :root {
-      --bg: #0a0a0b;
-      --bg-elevated: #111113;
-      --surface: #161618;
-      --surface-hover: #1c1c1f;
-      --border: rgba(255,255,255,0.06);
-      --border-strong: rgba(255,255,255,0.1);
-      --text: #ededed;
-      --text-secondary: #a1a1aa;
-      --text-muted: #71717a;
-      --accent: #6366f1;
-      --accent-hover: #818cf8;
-      --accent-bg: rgba(99,102,241,0.1);
-      --ok: #22c55e;
-      --ok-bg: rgba(34,197,94,0.1);
-      --warn: #f59e0b;
-      --warn-bg: rgba(245,158,11,0.1);
-      --bad: #ef4444;
-      --bad-bg: rgba(239,68,68,0.1);
+      --bg: #f8f7f5;
+      --bg-elevated: #ffffff;
+      --surface: #ffffff;
+      --surface-hover: #f3f1ef;
+      --border: rgba(82,82,91,0.12);
+      --border-strong: rgba(82,82,91,0.2);
+      --text: #3f3f46;
+      --text-secondary: #71717a;
+      --text-muted: #a1a1aa;
+      --accent: #7c6cf0;
+      --accent-hover: #6d5ee8;
+      --accent-bg: rgba(124,108,240,0.08);
+      --ok: #16a34a;
+      --ok-bg: rgba(22,163,74,0.08);
+      --warn: #d97706;
+      --warn-bg: rgba(217,119,6,0.08);
+      --bad: #dc2626;
+      --bad-bg: rgba(220,38,38,0.08);
       --radius: 10px;
       --radius-sm: 6px;
-      --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
-      --shadow: 0 4px 12px rgba(0,0,0,0.25);
-      --shadow-lg: 0 8px 24px rgba(0,0,0,0.3);
+      --shadow-sm: 0 1px 3px rgba(0,0,0,0.04);
+      --shadow: 0 2px 8px rgba(0,0,0,0.06);
+      --shadow-lg: 0 8px 24px rgba(0,0,0,0.08);
     }
-    @media (prefers-color-scheme: dark) { :root { color-scheme: dark; } }
     * { box-sizing:border-box; margin:0; padding:0; }
     @keyframes spin { to { transform: rotate(360deg); } }
     @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
@@ -175,9 +174,9 @@ export function renderHomePage(): string {
     .live-feed .meta-line { color: var(--text-muted); padding: 2px 0; }
     .live-feed .feed-ts { color: var(--text-muted); font-size: 11px; margin-right: 6px; }
     .mermaid { background: var(--bg-elevated); border-radius: var(--radius); padding: 16px; }
-    .mermaid .node.passed { fill: rgba(34,197,94,0.15) !important; stroke: var(--ok) !important; }
-    .mermaid .node.failed { fill: rgba(239,68,68,0.15) !important; stroke: var(--bad) !important; }
-    .mermaid .node.running { fill: rgba(245,158,11,0.15) !important; stroke: var(--warn) !important; stroke-width: 2px !important; }
+    .mermaid .node.passed { fill: #f0fdf4 !important; stroke: var(--ok) !important; }
+    .mermaid .node.failed { fill: #fef2f2 !important; stroke: var(--bad) !important; }
+    .mermaid .node.running { fill: #fffbeb !important; stroke: var(--warn) !important; stroke-width: 2px !important; }
     .mermaid .node.entry { stroke: var(--accent) !important; stroke-width: 2px !important; }
     /* timeline blocks */
     .tl-block {
@@ -218,14 +217,14 @@ export function renderHomePage(): string {
     /* scrollbar */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+    ::-webkit-scrollbar-thumb { background: rgba(82,82,91,0.15); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(82,82,91,0.25); }
   </style>
 </head>
 <body>
   <header><div style="display:flex;align-items:center;gap:10px"><button id="sidebarToggle" style="padding:4px 8px;font-size:14px;cursor:pointer;background:transparent;border:none;color:var(--text-secondary)">&#9776;</button><h1>Verana</h1></div><div class="muted" id="connection">SSE: idle</div><div id="llmStatusBar" style="display:none;align-items:center;gap:6px" class="llm-indicator"><span class="llm-dot"></span><span class="llm-status-text">LLM</span></div></header>
   <main>
-    <section id="sidebar" style="border-right:1px solid var(--border); display:flex; flex-direction:column; transition: width 0.2s; overflow:hidden;">
+    <section id="sidebar" style="border-right:1px solid var(--border); display:flex; flex-direction:column; transition: width 0.2s; overflow:hidden; background:var(--bg-elevated);">
       <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">Projects <button id="newProjectBtn" style="font-size:11px;padding:3px 8px;background:transparent;border:1px solid var(--border);color:var(--text-secondary)">新建</button></div>
       <div id="projects" style="flex:1; overflow-y:auto; padding:8px;"></div>
     </section>
