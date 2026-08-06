@@ -249,7 +249,7 @@ export function renderHomePage(): string {
       </div>
     </section>
   </main>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>`;
