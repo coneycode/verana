@@ -877,7 +877,45 @@ async function loadDeliverables() {
   try {
     const files = await api('/projects/'+selectedId+'/deliverables');
     if (!files.length) { el.innerHTML = '<div class="muted">暂无交付物。</div>'; return; }
-    el.innerHTML = files.map(f => '<div style="margin-bottom:12px"><div class="qa-q">'+escapeHtml(f.path)+'</div><div class="md-content" style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:12px;max-height:400px;overflow:auto">'+markdownToHtml(f.content)+'</div></div>').join('');
+    // tab 切换布局:左侧 tab 栏 + 右侧内容区
+    let html = '<div style="display:flex;gap:0;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">';
+    // 左侧 tab
+    html += '<div style="flex-shrink:0;border-right:1px solid var(--border);background:var(--bg-elevated);min-width:140px">';
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const tabName = f.path.split('/').pop();
+      const isActive = i === 0;
+      html += '<div class="del-tab" data-idx="'+i+'" style="padding:8px 12px;cursor:pointer;font-size:13px;font-weight:'+(isActive?'600':'400')+';color:'+(isActive?'var(--accent)':'var(--text-secondary)')+';background:'+(isActive?'var(--surface)':'transparent')+';border-left:'+(isActive?'3px solid var(--accent)':'3px solid transparent')+';transition:all 0.15s ease;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(tabName)+'</div>';
+    }
+    html += '</div>';
+    // 右侧内容
+    html += '<div style="flex:1;min-width:0">';
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const isActive = i === 0;
+      html += '<div class="del-panel" data-idx="'+i+'" style="display:'+(isActive?'block':'none')+';padding:16px;max-height:500px;overflow:auto">'+markdownToHtml(f.content)+'</div>';
+    }
+    html += '</div></div>';
+    el.innerHTML = html;
+    // tab 切换事件
+    el.querySelectorAll('.del-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const idx = tab.dataset.idx;
+        el.querySelectorAll('.del-tab').forEach(t => {
+          t.style.fontWeight = '400';
+          t.style.color = 'var(--text-secondary)';
+          t.style.background = 'transparent';
+          t.style.borderLeftColor = 'transparent';
+        });
+        tab.style.fontWeight = '600';
+        tab.style.color = 'var(--accent)';
+        tab.style.background = 'var(--surface)';
+        tab.style.borderLeftColor = 'var(--accent)';
+        el.querySelectorAll('.del-panel').forEach(p => {
+          p.style.display = p.dataset.idx === idx ? 'block' : 'none';
+        });
+      });
+    });
   } catch(e) { el.innerHTML = '<div class="muted">加载失败: '+escapeHtml(e.message)+'</div>'; }
 }
 
