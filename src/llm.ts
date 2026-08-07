@@ -185,7 +185,10 @@ export function parseJsonLoose<T = unknown>(raw: string): T {
   let fenced = raw.replace(/```json\s*/g, "").replace(/```/g, "").trim();
   const start = fenced.search(/[[{]/);
   const end = Math.max(fenced.lastIndexOf("}"), fenced.lastIndexOf("]"));
-  if (start === -1 || end === -1) throw new Error(`No JSON found in LLM output: ${raw.slice(0, 200)}`);
+  if (start === -1 || end === -1) {
+    console.error(`[parseJsonLoose] No JSON found. raw_len=${raw.length}, fenced_len=${fenced.length}, fenced_head=${JSON.stringify(fenced.slice(0, 100))}, fenced_tail=${JSON.stringify(fenced.slice(-50))}`);
+    throw new Error(`No JSON found in LLM output: ${raw.slice(0, 200)}`);
+  }
   const jsonStr = fenced.slice(start, end + 1);
   try {
     return JSON.parse(jsonStr) as T;

@@ -32,10 +32,10 @@ function buildCapabilityGraph(spec) {
   if (!spec || !spec.capabilities) return '';
   const caps = spec.capabilities;
   let lines = ['flowchart TD'];
-  lines.push('  classDef agent fill:#eef0ff,stroke:var(--accent),color:var(--accent)');
-  lines.push('  classDef light fill:#f0fdf4,stroke:var(--ok),color:var(--ok)');
-  lines.push('  classDef entry fill:#fffbeb,stroke:var(--warn),color:var(--warn),stroke-width:2px');
-  lines.push('  classDef instance fill:var(--surface-hover),stroke:var(--border-strong),color:var(--text-secondary)');
+  lines.push('  classDef agent fill:#eef0ff,stroke:#7c6cf0,color:#7c6cf0');
+  lines.push('  classDef light fill:#f0fdf4,stroke:#16a34a,color:#16a34a');
+  lines.push('  classDef entry fill:#fffbeb,stroke:#d97706,color:#d97706,stroke-width:2px');
+  lines.push('  classDef instance fill:#f3f1ef,stroke:#a1a1aa,color:#71717a');
 
   // 画节点 + 实例子节点
   for (const c of caps) {
@@ -109,9 +109,9 @@ function buildExecutionGraph(spec, wf) {
   // 从事件日志的实际执行顺序推断边:如果 A 执行完后 B 接着执行,A→B 画一条边
   // 但我们这里没有事件日志的顺序信息(只有 runs),所以只画节点不画边
   let lines = ['flowchart TD'];
-  lines.push('  classDef passed fill:#f0fdf4,stroke:var(--ok),color:var(--ok)');
-  lines.push('  classDef failed fill:#fef2f2,stroke:var(--bad),color:var(--bad)');
-  lines.push('  classDef running fill:#fffbeb,stroke:var(--warn),color:var(--warn),stroke-width:3px');
+  lines.push('  classDef passed fill:#f0fdf4,stroke:#16a34a,color:#16a34a');
+  lines.push('  classDef failed fill:#fef2f2,stroke:#dc2626,color:#dc2626');
+  lines.push('  classDef running fill:#fffbeb,stroke:#d97706,color:#d97706,stroke-width:3px');
   for (const c of caps) {
     const nodeRuns = runs[c.id] ?? [];
     const runCount = nodeRuns.length;
@@ -296,6 +296,16 @@ function renderViewMode(el, mode) {
       }
       if (workflowSpec.hard_constraints?.length) { html += '<div class="section-title" style="margin-top:8px">硬约束</div>'; for (const h of workflowSpec.hard_constraints) html += '<div>- '+escapeHtml(h)+'</div>'; }
       if (workflowSpec.soft_guidance?.length) { html += '<div class="section-title" style="margin-top:8px">软引导</div>'; for (const s of workflowSpec.soft_guidance) html += '<div>- '+escapeHtml(s)+'</div>'; }
+      // 能力关系图
+      html += '<div id="capGraph" style="margin-top:12px"></div>';
+      let legendHtml = '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.6">';
+      legendHtml += '<b>图例:</b> ';
+      legendHtml += '实线 → 顺序路径(可能执行顺序) · ';
+      legendHtml += '虚线 -.retry.-> 节点可被 scheduler 重试 · ';
+      legendHtml += '虚线 -.fail回退.-> 审核失败回退到产出节点 · ';
+      legendHtml += '×N = 预期执行次数(=instances 数量,无 instances = ×1 一次性)';
+      legendHtml += '</div>';
+      html += legendHtml;
     } else { html += '<div class="muted">无 spec 数据</div>'; }
   } else if (mode === 'executing') {
     // 展示时间线(只读)
@@ -317,6 +327,11 @@ function renderViewMode(el, mode) {
 
   html += '</div>';
   el.innerHTML = html;
+  // 渲染 mermaid 图(规划阶段回顾)
+  if ((mode === 'composing' || mode === 'plan_review') && workflowSpec) {
+    const graphDef = buildCapabilityGraph(workflowSpec);
+    renderMermaidGraph('capGraph', graphDef);
+  }
   bindViewModeButtons(mode);
 }
 
