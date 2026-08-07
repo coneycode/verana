@@ -98,10 +98,18 @@ export class HermesAdapter implements ExecutorAdapter {
 
       let stdout = "";
       let stderr = "";
-      const timer = setTimeout(() => {
-        child.kill("SIGTERM");
-        try { child.kill("SIGKILL"); } catch {}
-      }, timeoutMs);
+      let remainingTimeout = timeoutMs;
+      let timer: NodeJS.Timeout;
+
+      // 检测到 429 sleep 时延长 timeout
+      const scheduleTimeout = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          child.kill("SIGTERM");
+          try { child.kill("SIGKILL"); } catch {}
+        }, remainingTimeout);
+      };
+      scheduleTimeout();
 
       // 实时推送 stdout 的每一行(hermes 工具调用过程 + 最终输出)
       let stdoutBuffer = "";
@@ -113,6 +121,12 @@ export class HermesAdapter implements ExecutorAdapter {
           stdout += line + "\n";
           // 实时推给前端(通过 callback,由 graph-engine 接 bus.publish)
           onOutputLine?.(line);
+          // 检测 429 限流:hermes 自己 sleep 60 等待,延长 timeout
+          if (line.includes("429") || line.includes("RateLimit") || line.includes("Rate limited") || line.includes("sleep 60")) {
+            remainingTimeout += 90_000;  // 给 90 秒余量(60s sleep + 30s 恢复)
+            scheduleTimeout();
+            onOutputLine?.(`⏱️ 检测到 429 限流,timeout 已延长至 ${Math.round(remainingTimeout / 1000)}s`);
+          }
         }
       });
       child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
