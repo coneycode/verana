@@ -58,7 +58,12 @@ const COMPOSER_SYSTEM = `你是一个 workflow 规划者(Composer)。你的职�
 }
 
 规则:
-- 能力清单要覆盖目标的完整交付链(创作型:大纲→写→审→更新记忆→判断;调研型:收集证据→沉淀结构化正文→审)
+- 能力清单要覆盖目标的完整交付链(创作型:大纲→写→审→更新记忆→判断;调研型:收集证据→起草大纲→写报告→润色修订→审)
+- 报告写作链路:有 write_report 的 spec 必须包含 draft_outline 和 polish_report 三个节点:
+  - draft_outline (light):根据 evidence_index 生成报告大纲(章节列表+每章要点+数据引用指引),写入 blackboard 的 report_outline 字段。不搜索、不产出文件,只做结构规划
+  - write_report (agent):按大纲写完整初稿。context_inputs 包含 report_outline 和 evidence_index
+  - polish_report (agent):读初稿做语言/逻辑/格式/来源标注优化,产出最终报告。context_inputs 包含 report_outline
+  - 顺序:draft_outline → write_report → polish_report,缺任何一个校验不通过
 - 轻节点(light):判断/转换/更新记忆,单次调用;重节点(agent):创作/调研/分析,自主完成一件事
 - 每个节点必须有 checks(无验收不执行)
 - bounded 的 blackboard 字段必须有节点负责 updates

@@ -50,6 +50,28 @@ export function validateGraphWorkflow(spec: GraphWorkflowSpec): ValidationResult
     }
   }
 
+  // 报告写作链路完整性:有 write_report 必须有 draft_outline 在前 + polish_report 在后
+  const capIds = new Set((spec.capabilities ?? []).map(c => c.id));
+  if (capIds.has("write_report")) {
+    if (!capIds.has("draft_outline")) {
+      errors.push("write_report exists but draft_outline (light node, 生成报告大纲) is missing — must precede write_report");
+    }
+    if (!capIds.has("polish_report")) {
+      errors.push("write_report exists but polish_report (agent node, 润色修订报告) is missing — must follow write_report");
+    }
+    // 顺序检查:draft_outline 在 write_report 前,write_report 在 polish_report 前
+    const capOrder = (spec.capabilities ?? []).map(c => c.id);
+    const draftIdx = capOrder.indexOf("draft_outline");
+    const writeIdx = capOrder.indexOf("write_report");
+    const polishIdx = capOrder.indexOf("polish_report");
+    if (draftIdx >= 0 && writeIdx >= 0 && draftIdx > writeIdx) {
+      errors.push("draft_outline must precede write_report in capability order");
+    }
+    if (writeIdx >= 0 && polishIdx >= 0 && writeIdx > polishIdx) {
+      errors.push("write_report must precede polish_report in capability order");
+    }
+  }
+
   // 入口节点存在
   if (spec.entry_node && !ids.has(spec.entry_node)) {
     errors.push(`entry_node ${spec.entry_node} not in capabilities`);
