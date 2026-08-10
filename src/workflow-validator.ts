@@ -50,25 +50,22 @@ export function validateGraphWorkflow(spec: GraphWorkflowSpec): ValidationResult
     }
   }
 
-  // 报告写作链路完整性:有 write_report 必须有 draft_outline 在前 + polish_report 在后
-  const capIds = new Set((spec.capabilities ?? []).map(c => c.id));
-  if (capIds.has("write_report")) {
-    if (!capIds.has("draft_outline")) {
-      errors.push("write_report exists but draft_outline (light node, 生成报告大纲) is missing — must precede write_report");
+  // 报告写作链路完整性:有产出 deliverable 的节点,必须有 draft_outline 在前 + polish 在后
+  // 不按固定 ID 匹配(Composer 可能用 write_ppt_report 等不同 ID),按产出特征匹配
+  const caps = spec.capabilities ?? [];
+  const deliverableNodes = caps.filter(c => c.outputs?.some(o => (o.role ?? "deliverable") === "deliverable"));
+  if (deliverableNodes.length > 0) {
+    const writeNode = deliverableNodes[0]; // 第一个产出 deliverable 的节点是写作节点
+    // 检查有没有 light 节点在它前面(大纲规划)
+    const writeIdx = caps.indexOf(writeNode);
+    const hasDraftOutline = caps.slice(0, writeIdx).some(c => c.kind === "light");
+    if (!hasDraftOutline) {
+      errors.push(`${writeNode.id} produces deliverable but no light node (draft_outline) precedes it — report writing requires a structure planning step before writing`);
     }
-    if (!capIds.has("polish_report")) {
-      errors.push("write_report exists but polish_report (agent node, 润色修订报告) is missing — must follow write_report");
-    }
-    // 顺序检查:draft_outline 在 write_report 前,write_report 在 polish_report 前
-    const capOrder = (spec.capabilities ?? []).map(c => c.id);
-    const draftIdx = capOrder.indexOf("draft_outline");
-    const writeIdx = capOrder.indexOf("write_report");
-    const polishIdx = capOrder.indexOf("polish_report");
-    if (draftIdx >= 0 && writeIdx >= 0 && draftIdx > writeIdx) {
-      errors.push("draft_outline must precede write_report in capability order");
-    }
-    if (writeIdx >= 0 && polishIdx >= 0 && writeIdx > polishIdx) {
-      errors.push("write_report must precede polish_report in capability order");
+    // 检查有没有 agent 节点在它后面(润色修订)
+    const hasPolish = caps.slice(writeIdx + 1).some(c => c.kind === "agent" && c.outputs?.some(o => (o.role ?? "deliverable") === "deliverable" || (o.role ?? "") === "intermediate"));
+    if (!hasPolish) {
+      errors.push(`${writeNode.id} produces deliverable but no polish/revise agent node follows it — report writing requires a polish step after writing`);
     }
   }
 
