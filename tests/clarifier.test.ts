@@ -4,56 +4,103 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { generateClarifyBatch, reviewClarifications, buildGoalSummary } from "../src/clarifier.js";
+import { clarifyChat, buildGoalSummary, migrateClarifier } from "../src/clarifier.js";
 import { FakeLlmClient } from "../src/fake-llm.js";
 import { createProject, getProject, saveProjectState } from "../src/project-store.js";
 
-test("generateClarifyBatch: LLM 生成多个问题,代码去重", async () => {
-  const root = await mkdtemp(join(tmpdir(), "verana-clarify-batch-"));
+test("clarifyChat: LLM 返回 ask", async () => {
+  const root = await mkdtemp(join(tmpdir(), "verana-clarify-chat-"));
   const project = await createProject(root, "调研海外红人监控系统");
   const client = new FakeLlmClient(() => ({
     json: {
-      questions: [
-        { dimension: "平台", question: "你要监控哪些平台?", risk: "不澄清会偏掉" },
-        { dimension: "规模", question: "监控多少个红人?", risk: "影响方案选型" },
-        { dimension: "平台", question: "你要监控哪些平台?", risk: "重复" }, // 重复,应被去重
-      ],
+      action: "ask",
+      topic: "平台",
+      question: "你要监控哪些平台?",
+      reason: "不澄清会偏掉",
     },
   }));
-  const batch = await generateClarifyBatch(await getProject(root, project.id), client);
-  assert.equal(batch.questions.length, 2); // 第三个重复被去掉
-  assert.equal(batch.questions[0]?.dimension, "平台");
-  assert.equal(batch.questions[1]?.dimension, "规模");
+  const state = await getProject(root, project.id);
+  const result = await clarifyChat(state, client);
+  assert.equal(result.type, "question");
+  assert.equal(result.topic, "平台");
+  assert.equal(result.content, "你要监控哪些平台?");
 });
 
-test("reviewClarifications: 不需要追问", async () => {
-  const root = await mkdtemp(join(tmpdir(), "verana-clarify-review-"));
+test("clarifyChat: LLM 返回 done + conclusions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "verana-clarify-done-"));
   const project = await createProject(root, "调研海外红人监控系统");
   const state = await getProject(root, project.id);
   state.status.clarifier = {
     status: "clarifying",
-    clarifications: [
-      { q: "监控哪些平台?", a: "YouTube和TikTok", risk: "" },
-      { q: "监控多少个?", a: "几百个", risk: "" },
+    messages: [
+      { role: "assistant", content: "你要监控哪些平台?" },
+      { role: "user", content: "YouTube和TikTok" },
     ],
   };
-  await saveProjectState(root, state);
-  const client = new FakeLlmClient(() => ({ json: { need_followup: false } }));
-  const review = await reviewClarifications(state, client);
-  assert.equal(review.needFollowup, false);
-  assert.equal(review.questions.length, 0);
+  const client = new FakeLlmClient(() => ({
+    json: {
+      action: "done",
+      conclusions: [
+        { topic: "平台", conclusion: "监控YouTube和TikTok两个平台" },
+        { topic: "规模", conclusion: "几百个红人" },
+      ],
+    },
+  }));
+  const result = await clarifyChat(state, client);
+  assert.equal(result.type, "done");
+  assert.equal(result.conclusions.length, 2);
+  assert.equal(result.conclusions[0].topic, "平台");
 });
 
-test("buildGoalSummary includes all clarifications", async () => {
+test("migrateClarifier: 旧 clarifications 转 messages", () => {
+  const old = {
+    status: "clarifying" as const,
+    clarifications: [
+      { q: "平台?", a: "YouTube", risk: "不澄清偏掉" },
+      { q: "规模?", a: "几百个", risk: "影响选型" },
+    ],
+  };
+  const migrated = migrateClarifier(old);
+  assert.equal(migrated.messages.length, 4);
+  assert.equal(migrated.messages[0].role, "assistant");
+  assert.equal(migrated.messages[0].content, "平台?");
+  assert.equal(migrated.messages[1].role, "user");
+  assert.equal(migrated.messages[1].content, "YouTube");
+});
+
+test("buildGoalSummary: 从 conclusions 生成总结", async () => {
   const root = await mkdtemp(join(tmpdir(), "verana-clarify-summary-"));
   const project = await createProject(root, "调研海外红人监控系统");
   const state = await getProject(root, project.id);
   state.status.clarifier = {
-    status: "clarifying",
-    clarifications: [{ q: "平台?", a: "YouTube", risk: "不澄清偏掉" }],
+    status: "goal_confirmed",
+    messages: [
+      { role: "assistant", content: "平台?" },
+      { role: "user", content: "YouTube" },
+    ],
+    conclusions: [
+      { topic: "平台", conclusion: "监控YouTube平台" },
+      { topic: "规模", conclusion: "几百个红人" },
+    ],
   };
   const summary = buildGoalSummary(state);
   assert.match(summary, /# Goal Confirmation/);
+  assert.match(summary, /监控YouTube平台/);
+  assert.match(summary, /几百个红人/);
+});
+
+test("buildGoalSummary: 兜底从 messages 提取(无 conclusions)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "verana-clarify-fallback-"));
+  const project = await createProject(root, "调研海外红人监控系统");
+  const state = await getProject(root, project.id);
+  state.status.clarifier = {
+    status: "goal_confirmed",
+    messages: [
+      { role: "assistant", content: "平台?" },
+      { role: "user", content: "YouTube" },
+    ],
+  };
+  const summary = buildGoalSummary(state);
+  assert.match(summary, /平台/);
   assert.match(summary, /YouTube/);
-  assert.match(summary, /偏掉/);
 });

@@ -219,6 +219,23 @@ export function renderHomePage(): string {
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: rgba(82,82,91,0.15); border-radius: 3px; }
     ::-webkit-scrollbar-thumb:hover { background: rgba(82,82,91,0.25); }
+    /* chat bubbles */
+    .chat-box { max-width:640px; margin:0 auto; display:flex; flex-direction:column; gap:12px; }
+    .chat-msg { display:flex; gap:8px; max-width:80%; animation: fadeIn 0.2s ease; }
+    .chat-msg.assistant { align-self: flex-start; }
+    .chat-msg.user { align-self: flex-end; flex-direction: row-reverse; }
+    .chat-bubble { padding: 10px 14px; border-radius: var(--radius); font-size: 14px; line-height: 1.6; }
+    .chat-msg.assistant .chat-bubble { background: var(--surface); color: var(--text); }
+    .chat-msg.user .chat-bubble { background: var(--accent-bg); color: var(--text); }
+    .chat-input-row { display:flex; gap:8px; margin-top:8px; }
+    .chat-input-row input { flex:1; }
+    /* clarify conclusions card */
+    .clarify-card { padding:20px; border-radius:var(--radius); background:var(--surface); box-shadow:var(--shadow); margin-top:12px; animation:fadeIn 0.3s ease; }
+    .clarify-card-title { font-size:16px; font-weight:600; margin-bottom:12px; display:flex; align-items:center; gap:6px; }
+    .clarify-item { padding:8px 0; border-bottom:1px solid var(--border); }
+    .clarify-item:last-child { border-bottom:none; }
+    .clarify-topic { font-weight:500; color:var(--accent); font-size:13px; margin-right:6px; }
+    .clarify-conclusion { color:var(--text); font-size:14px; }
   </style>
 </head>
 <body>

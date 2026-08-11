@@ -365,30 +365,65 @@ function renderMain() {
     return;
   }
 
-  // --- Clarifying ---
+  // --- Clarifying (对话式) ---
   if (phase === 'created' || phase === 'clarifying') {
-    const batch = state.status.clarifier?.pending_batch;
-    const entries = state.status.clarifier?.clarifications ?? [];
-    if (batch && batch.length > 0) {
-      // 有待回答的问题,展示批量问答表单
-      let html = '<div class="guide"><div class="guide-title">澄清目标</div><div class="guide-desc">请回答以下问题,帮助系统更好地规划方案:</div>';
-      for (let i = 0; i < batch.length; i++) {
-        const q = batch[i];
-        html += '<div class="qa-item" style="margin:8px 0"><div class="qa-q">Q'+(i+1)+': '+escapeHtml(q.question)+'</div>';
-        html += '<div class="muted" style="font-size:12px;margin:2px 0">'+escapeHtml(q.risk)+'</div>';
-        html += '<input id="answer_'+i+'" data-q="'+escapeHtml(q.question)+'" placeholder="输入回答" style="width:100%;margin-top:4px" /></div>';
+    const clarifier = state.status.clarifier;
+    const messages = clarifier?.messages ?? [];
+    const conclusions = clarifier?.conclusions;
+    const isConfirmed = clarifier?.status === 'goal_confirmed';
+
+    let html = '<div class="chat-box">';
+
+    // 渲染已有对话
+    for (const m of messages) {
+      html += '<div class="chat-msg ' + m.role + '"><div class="chat-bubble">' + escapeHtml(m.content) + '</div></div>';
+    }
+
+    // 如果有结论，渲染结论卡片
+    if (conclusions && conclusions.length > 0 && !isConfirmed) {
+      html += '<div class="clarify-card">';
+      html += '<div class="clarify-card-title">✓ 澄清完成</div>';
+      for (const c of conclusions) {
+        html += '<div class="clarify-item"><span class="clarify-topic">[' + escapeHtml(c.topic) + ']</span><span class="clarify-conclusion">' + escapeHtml(c.conclusion) + '</span></div>';
       }
-      html += '<div class="row" style="margin-top:8px"><button id="submitBatchBtn">提交全部回答</button><button class="secondary" id="skipClarifyBtn">跳过,直接生成</button></div></div>';
-      if (entries.length > 0) {
-        html += '<div class="section-title" style="margin-top:12px">已回答</div>';
-        for (const e of entries) { html += '<div class="qa-item"><div class="qa-q">Q: '+escapeHtml(e.q)+'</div><div class="qa-a">A: '+escapeHtml(e.a)+'</div></div>'; }
-      }
-      el.innerHTML = html;
-      $('submitBatchBtn').onclick = () => doClarifyAnswer(batch.length);
-      $('skipClarifyBtn').onclick = () => doPlan();
-    } else {
-      // 没有待回答的问题
-      el.innerHTML = '<div class="guide"><div class="guide-title">澄清目标</div><div class="guide-desc muted">正在生成澄清问题...</div></div>';
+      html += '<div class="row" style="margin-top:12px"><button class="primary" id="confirmClarifyBtn">确认，开始规划</button><button class="secondary" id="continueClarifyBtn">继续补充</button></div>';
+      html += '</div>';
+    }
+
+    // 如果已确认，显示等待规划
+    if (isConfirmed) {
+      html += '<div class="guide"><div class="guide-title">目标已确认</div><div class="guide-desc muted">正在规划中...</div></div>';
+    } else if (!conclusions || conclusions.length === 0) {
+      // 对话模式：显示输入框
+      html += '<div class="chat-input-row"><input id="clarifyInput" placeholder="输入回答..." /><button class="primary" id="clarifySendBtn">发送</button></div>';
+    }
+
+    html += '</div>';
+    el.innerHTML = html;
+
+    // 事件绑定
+    const sendBtn = $('clarifySendBtn');
+    const input = $('clarifyInput');
+    if (sendBtn && input) {
+      sendBtn.onclick = () => doClarifyChat(input);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doClarifyChat(input); } });
+    }
+    const confirmBtn = $('confirmClarifyBtn');
+    if (confirmBtn) confirmBtn.onclick = () => doClarifyConfirm();
+    const continueBtn = $('continueClarifyBtn');
+    if (continueBtn) continueBtn.onclick = () => {
+      // 隐藏结论卡片，显示输入框
+      const card = document.querySelector('.clarify-card');
+      if (card) card.remove();
+      const box = document.querySelector('.chat-box');
+      if (box) box.insertAdjacentHTML('beforeend', '<div class="chat-input-row"><input id="clarifyInput" placeholder="补充信息..." /><button class="primary" id="clarifySendBtn">发送</button></div>');
+      const ni = $('clarifyInput'); const ns = $('clarifySendBtn');
+      if (ni && ns) { ns.onclick = () => doClarifyChat(ni); ni.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doClarifyChat(ni); } }); ni.focus(); }
+    };
+
+    // 首次进入：如果没有 messages，自动触发第一个问题
+    if (messages.length === 0 && !conclusions && !isConfirmed) {
+      post('/projects/' + selectedId + '/clarify-chat', {}).then(() => { refresh(); }).catch(e => { console.error('clarify-chat failed:', e.message); });
     }
     return;
   }
@@ -936,28 +971,32 @@ async function loadDeliverables() {
 
 async function maybeAutoStartClarify() {
   const phase = getPhase();
-  if (phase === 'created' && !state.status.clarifier?.pending_batch) { await doClarify(); }
+  if (phase === 'created') {
+    const msgCount = state.status.clarifier?.messages?.length ?? 0;
+    if (msgCount === 0) {
+      try { await post('/projects/'+selectedId+'/clarify-chat', {}); await refresh(); }
+      catch(e) { /* refresh will show error */ }
+    }
+  }
 }
 
-async function doClarify() {
+async function doClarifyChat(inputEl) {
+  const answer = inputEl.value.trim();
+  if (!answer) return;
+  inputEl.value = '';
   setBusy(true);
-  try { await post('/projects/'+selectedId+'/clarify-batch'); await refresh(); }
-  catch(e) { alert(e.message); }
+  try {
+    await post('/projects/'+selectedId+'/clarify-answer', { answer });
+    await refresh();
+  } catch(e) { alert(e.message); }
   setBusy(false);
 }
 
-async function doClarifyAnswer(count) {
-  const answers = [];
-  for (let i = 0; i < count; i++) {
-    const el = $('answer_'+i);
-    if (el) answers.push({ q: el.dataset.q, a: el.value.trim() });
-  }
-  if (answers.some(a => !a.a)) { alert('请回答所有问题'); return; }
+async function doClarifyConfirm() {
   setBusy(true);
   try {
-    const res = await post('/projects/'+selectedId+'/clarify-answer', { answers });
-    if (res && res.needFollowup) { await refresh(); }
-    else { await doPlan(); }
+    await post('/projects/'+selectedId+'/clarify-confirm');
+    await refresh();
   } catch(e) { alert(e.message); }
   setBusy(false);
 }

@@ -4,7 +4,7 @@ import { readFile, readdir, stat, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { parse } from "yaml";
 
-import { generateClarifyBatch, reviewClarifications, buildGoalSummary, type ClarificationEntry } from "./clarifier.js";
+import { clarifyChat, buildGoalSummary, migrateClarifier } from "./clarifier.js";
 import { EventBus, projectEvent } from "./events.js";
 import { HttpLlmClient, loadConfig, setLlmStatusCallback, type LlmClient } from "./llm.js";
 import { approveGate, deleteProject, getProject, listProjects, projectPath, rejectGate, saveProjectState, writeYaml } from "./project-store.js";
@@ -78,49 +78,65 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   });
 
   // 一次性生成全部澄清问题
-  app.post<{ Params: { id: string } }>("/projects/:id/clarify-batch", async (request) => {
+  // 对话式澄清：获取下一个问题
+  app.post<{ Params: { id: string } }>("/projects/:id/clarify-chat", async (request) => {
     const state = await getProject(options.rootDir, request.params.id);
-    const batch = await generateClarifyBatch(state, client);
-    // 存到 state(待回答)
-    if (!state.status.clarifier) {
-      state.status.clarifier = { status: "clarifying", clarifications: [] };
+    state.status.clarifier = migrateClarifier(state.status.clarifier);
+    if (!state.status.clarifier.messages) state.status.clarifier.messages = [];
+    if (state.status.clarifier.status === "goal_confirmed") {
+      return { type: "done", conclusions: state.status.clarifier.conclusions ?? [] };
     }
-    state.status.clarifier.current_question = null;
-    state.status.clarifier.pending_batch = batch.questions;
-    await saveProjectState(options.rootDir, state);
-    bus.publish(projectEvent("clarify_started", request.params.id));
-    return batch;
-  });
-
-  // 批量回答澄清问题
-  app.post<{ Params: { id: string }; Body: { answers: Array<{ q: string; a: string }> } }>("/projects/:id/clarify-answer", async (request) => {
-    const state = await getProject(options.rootDir, request.params.id);
-    const answers = request.body.answers ?? [];
-    // 把问答追加到 clarifications
-    const existing = state.status.clarifier?.clarifications ?? [];
-    const newEntries: ClarificationEntry[] = answers.map(a => ({ q: a.q, a: a.a, risk: "" }));
-    state.status.clarifier = {
-      status: "clarifying",
-      clarifications: [...existing, ...newEntries],
-    };
-    state.status.clarifier.pending_batch = undefined;
-    await saveProjectState(options.rootDir, state);
-
-    // 二次校验:是否需要追问
-    const review = await reviewClarifications(state, client);
-    if (review.needFollowup && review.questions.length > 0) {
-      state.status.clarifier.pending_batch = review.questions;
+    const result = await clarifyChat(state, client);
+    if (result.type === "question") {
+      state.status.clarifier.messages.push({ role: "assistant", content: result.content });
+      state.status.clarifier.status = "clarifying";
       await saveProjectState(options.rootDir, state);
       bus.publish(projectEvent("input_recorded", request.params.id));
-      return { needFollowup: true, questions: review.questions };
+      return { type: "question", topic: result.topic, content: result.content };
+    } else {
+      state.status.clarifier.conclusions = result.conclusions;
+      await saveProjectState(options.rootDir, state);
+      bus.publish(projectEvent("input_recorded", request.params.id));
+      return { type: "done", conclusions: result.conclusions };
     }
+  });
 
-    // 不需要追问,澄清完成
+  // 对话式澄清：用户回答
+  app.post<{ Params: { id: string }; Body: { answer: string } }>("/projects/:id/clarify-answer", async (request) => {
+    const state = await getProject(options.rootDir, request.params.id);
+    state.status.clarifier = migrateClarifier(state.status.clarifier);
+    if (!state.status.clarifier.messages) state.status.clarifier.messages = [];
+    const answer = request.body.answer ?? "";
+    if (answer.trim()) {
+      state.status.clarifier.messages.push({ role: "user", content: answer });
+    }
+    const result = await clarifyChat(state, client);
+    if (result.type === "question") {
+      state.status.clarifier.messages.push({ role: "assistant", content: result.content });
+      await saveProjectState(options.rootDir, state);
+      bus.publish(projectEvent("input_recorded", request.params.id));
+      return { type: "question", topic: result.topic, content: result.content };
+    } else {
+      state.status.clarifier.conclusions = result.conclusions;
+      await saveProjectState(options.rootDir, state);
+      bus.publish(projectEvent("input_recorded", request.params.id));
+      return { type: "done", conclusions: result.conclusions };
+    }
+  });
+
+  // 对话式澄清：用户确认结论
+  app.post<{ Params: { id: string } }>("/projects/:id/clarify-confirm", async (request) => {
+    const state = await getProject(options.rootDir, request.params.id);
+    state.status.clarifier = migrateClarifier(state.status.clarifier);
     state.status.clarifier.status = "goal_confirmed";
     state.project.status = "composing";
     await saveProjectState(options.rootDir, state);
     bus.publish(projectEvent("input_recorded", request.params.id));
-    return { needFollowup: false, summary: buildGoalSummary(state) };
+    // fire-and-forget: 触发 plan
+    planGraphWorkflow(options.rootDir, request.params.id, client, bus)
+      .then(() => { bus.publish(projectEvent("plan_composed", request.params.id)); })
+      .catch((err: Error) => { console.error(`[plan] ${request.params.id} failed:`, err.message); bus.publish(projectEvent("run_failed", request.params.id, { error: err.message })); });
+    return { ok: true };
   });
 
   app.post<{ Params: { id: string } }>("/projects/:id/plan", async (request) => {
@@ -189,7 +205,7 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     const state = await getProject(options.rootDir, request.params.id);
     if (phase === "clarifying" || phase === "created") {
       // 重置到澄清:清掉 clarifier
-      state.status.clarifier = { status: "clarifying", current_question: null, clarifications: [] };
+      state.status.clarifier = { status: "clarifying", messages: [] };
       state.project.status = "created";
       state.status.workflows.solution = undefined;
     } else if (phase === "composing" || phase === "plan_review") {

@@ -203,8 +203,10 @@ export interface StatusRecord {
 
 export interface ClarifierRecord {
   status: "clarifying" | "goal_confirmed";
-  clarifications: Array<{ q: string; a: string; risk: string }>;
-  current_question?: { question: string; risk: string } | null;
+  messages: Array<{ role: "assistant" | "user"; content: string }>;
+  conclusions?: Array<{ topic: string; conclusion: string }>;
+  // 兼容旧格式
+  clarifications?: Array<{ q: string; a: string; risk: string }>;
   pending_batch?: Array<{ question: string; risk: string; dimension: string }> | null;
 }
 
