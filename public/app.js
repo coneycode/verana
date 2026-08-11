@@ -414,6 +414,10 @@ function renderMain() {
     html += '</div>'; // chat-container
     el.innerHTML = html;
 
+    // 滚动到最新消息
+    const msgContainer = $('chatMessages');
+    if (msgContainer) msgContainer.scrollTop = msgContainer.scrollHeight;
+
     // 事件绑定
     const sendBtn = $('clarifySendBtn');
     const input = $('clarifyInput');
