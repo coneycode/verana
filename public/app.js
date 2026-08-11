@@ -421,9 +421,10 @@ function renderMain() {
       if (ni && ns) { ns.onclick = () => doClarifyChat(ni); ni.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doClarifyChat(ni); } }); ni.focus(); }
     };
 
-    // 首次进入：如果没有 messages，自动触发第一个问题
-    if (messages.length === 0 && !conclusions && !isConfirmed) {
-      post('/projects/' + selectedId + '/clarify-chat', {}).then(() => { refresh(); }).catch(e => { console.error('clarify-chat failed:', e.message); });
+    // 首次进入：如果没有 messages 且没有 conclusions 且没有 pending 请求，自动触发第一个问题
+    if (messages.length === 0 && !conclusions && !isConfirmed && !busy) {
+      busy = true;
+      post('/projects/' + selectedId + '/clarify-chat', {}).then(() => { busy = false; refresh(); }).catch(e => { busy = false; console.error('clarify-chat failed:', e.message); });
     }
     return;
   }
@@ -971,11 +972,14 @@ async function loadDeliverables() {
 
 async function maybeAutoStartClarify() {
   const phase = getPhase();
-  if (phase === 'created') {
+  if (phase === 'created' && !busy) {
     const msgCount = state.status.clarifier?.messages?.length ?? 0;
     if (msgCount === 0) {
-      try { await post('/projects/'+selectedId+'/clarify-chat', {}); await refresh(); }
-      catch(e) { /* refresh will show error */ }
+      busy = true;
+      try { await post('/projects/'+selectedId+'/clarify-chat', {}); }
+      catch(e) { /* ignore */ }
+      finally { busy = false; }
+      await refresh();
     }
   }
 }
