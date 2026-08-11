@@ -83,14 +83,15 @@ export function buildSmartFakeClient(): FakeLlmClient {
   let schedCount = 0;
   return new FakeLlmClient((role, system, user) => {
     // Clarifier
-    // 批量澄清:一次性生成多个问题
+    // 对话式澄清
     if (role === "composer" && system.includes("方案澄清助手")) {
-      return { json: { questions: [
-        { dimension: "平台", question: "你要监控哪些平台?", risk: "不澄清会导致方案偏掉" },
-        { dimension: "规模", question: "需要监控多少个红人?", risk: "影响系统选型的价格档位" },
-      ] } };
+      return { json: { action: "done", conclusions: [{ topic: "通用", conclusion: "测试目标" }] } };
     }
-    // 澄清二次校验
+    // 任务分类器
+    if (role === "composer" && system.includes("判断任务类型")) {
+      return { json: { task_type: "creative" } };
+    }
+    // 澄清二次校验(旧,兼容)
     if (role === "evaluator" && system.includes("澄清审核者")) {
       return { json: { need_followup: false } };
     }
@@ -191,7 +192,6 @@ function generateFakeDeliverable(sections: string[]): string {
 }
 
 function fakeComposerGraphSpec(userPrompt: string): unknown {
-  // 从 user prompt 提取 project_id(目标里没有,用固定结构)
   return {
     clarified: "写一部悬疑小说,约2章",
     deliverable_type: "creative",
@@ -199,16 +199,34 @@ function fakeComposerGraphSpec(userPrompt: string): unknown {
     acceptance: ["每章3000字以上", "情节连贯"],
     capabilities: [
       {
+        id: "draft_outline", kind: "light",
+        desc: "规划小说大纲",
+        outputs: [],
+        checks: [{ method: "llm_rubric", desc: "大纲完整" }],
+        updates: ["report_outline"],
+      },
+      {
         id: "write_chapter", kind: "agent", agent: "writer",
         desc: "根据大纲和已写内容写下一章",
-        outputs: [{ path: "solution/chapters/", desc: "章节文件" }],
+        outputs: [{ path: "solution/chapters/", desc: "章节文件", role: "deliverable" }],
         checks: [{ method: "llm_rubric", desc: ">=3000字,情节连贯" }],
         updates: ["summary"],
+        context_inputs: ["report_outline"],
+      },
+      {
+        id: "polish_report", kind: "agent", agent: "writer",
+        desc: "润色修订",
+        outputs: [{ path: "solution/final.md", desc: "最终稿", role: "deliverable" }],
+        checks: [{ method: "llm_rubric", desc: "通顺无错" }],
+        context_inputs: ["report_outline"],
       },
     ],
     guardrails: { max_iterations: 5, soft: [], human_checkpoint_every: 0 },
-    blackboard_schema: { fields: [{ key: "summary", desc: "滚动摘要", bounded: true }] },
-    entry_node: "write_chapter",
+    blackboard_schema: { fields: [
+      { key: "summary", desc: "滚动摘要", bounded: true },
+      { key: "report_outline", desc: "报告大纲", bounded: true },
+    ] },
+    entry_node: "draft_outline",
     completion_criteria: ["写到2章"],
     hard_constraints: ["输出纯正文,不含元描述"],
     soft_guidance: ["悬疑压抑基调"],

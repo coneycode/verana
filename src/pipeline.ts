@@ -12,7 +12,7 @@ import { getProjectDeliverableContract } from "./artifacts.js";
 // 重导出图执行引擎
 export { runGraphProject, readGraphSpec, applyHumanVerdict } from "./graph-engine.js";
 
-const COMPOSER_SYSTEM = `你是一个 workflow 规划者(Composer)。你的职责是把用户目标编译成一套可执行的图工作流规格。
+const COMPOSER_SYSTEM_BASE = `你是一个 workflow 规划者(Composer)。你的职责是把用户目标编译成一套可执行的图工作流规格。
 
 图工作流模型(不是静态 DAG):
 - 能力清单(capabilities):这个任务需要哪些功能节点,每个节点做什么、轻还是重、怎么验证
@@ -58,32 +58,68 @@ const COMPOSER_SYSTEM = `你是一个 workflow 规划者(Composer)。你的职�
 }
 
 规则:
-- 能力清单要覆盖目标的完整交付链(创作型:大纲→写→审→更新记忆→判断;调研型:收集证据→起草大纲→写报告→润色修订→审)
+- 能力清单要覆盖目标的完整交付链,参考下方"本次任务类型"给出的能力链骨架
 - 报告写作链路:产出 deliverable 的节点必须配套大纲规划和润色修订:
-  - 大纲规划(light 节点):在写作节点之前,根据 evidence_index 生成报告大纲(章节列表+每章要点+数据引用指引),写入 blackboard 的 report_outline 字段。不搜索、不产出文件,只做结构规划
-  - 写作节点(agent):按大纲写完整初稿。context_inputs 包含 report_outline 和 evidence_index。产出 role=deliverable
-  - 润色修订(agent):在写作节点之后,读初稿做语言/逻辑/格式/来源标注优化,产出最终报告。context_inputs 包含 report_outline
+  - 大纲规划(light 节点):在写作节点之前,根据 evidence_index 或目标要求生成报告大纲(章节列表+每章要点),写入 blackboard 的 report_outline 字段。不搜索、不产出文件,只做结构规划
+  - 写作节点(agent):按大纲写完整初稿。context_inputs 包含 report_outline。产出 role=deliverable
+  - 润色修订(agent):在写作节点之后,读初稿做语言/逻辑/格式优化,产出最终报告。context_inputs 包含 report_outline
   - 缺大纲规划或润色修订,校验不通过打回重生成
 - 轻节点(light):判断/转换/更新记忆,单次调用;重节点(agent):创作/调研/分析,自主完成一件事
 - 每个节点必须有 checks(无验收不执行)
 - bounded 的 blackboard 字段必须有节点负责 updates
 - guardrails.hard.max_iterations 必须有(安全阀)
-- creative/iterative 类任务(写多章/反复打磨)→ iterative=true,能力清单含循环潜力(同一节点可被多次调度)
-- research 类任务(一次性调研)→ iterative=false,能力清单线性。根据任务复杂度,可考虑拆分证据收集和结构化报告写作(不是强制)
 - hard_constraints:从澄清信息中提取客观、可判定的约束(格式/数量/预算/合规/平台),这些将变成 checks 的种子
 - soft_guidance:从澄清信息中提取主观方向性偏好(风格/基调/取舍),这些只作引导不强制
 - 拿不准是硬还是软的,默认归 soft_guidance(宁可少锁不可锁错)
-- deliverable_contract:根据任务性质决定是否输出 required_sections/forbidden_patterns。只有任务明确需要特定章节结构时才写;不确定就不输出(留空)。不要硬套通用章节(如"结论与建议"不一定适用所有调研任务)
-- instances:所有节点都声明 instances 字段。可多次调度的节点(如按方案/章节/维度分别处理)列出实例清单;一次性节点留空数组[]。对于有非空 instances 的节点,blackboard_schema 里必须设计"{node_id}_remaining"字段(记录未完成实例,bounded=true)
-- instances 的目的和判定:instances 的目的是拆分长任务,保证每次 agent 执行的上下文短、聚焦单一子任务,提升成功率。同时支持精准重试(只重跑失败的实例,不重跑已完成的)。判定标准:如果一个节点的工作可以拆成多个独立子任务,每个子任务需要 agent 单独搜索/推理/写入(如收集一个维度的证据、写一个章节),用 instances,每次 scheduler 调一个实例。如果一次 agent 执行能完成所有产出(如审阅整篇报告),不用 instances。典型场景:按维度/方案/章节分别收集证据 → instances=["维度1","维度2",...];逐章写作 → instances=["第1章","第2章",...]。非典型场景:一次性写完整报告/审阅 → instances=[]
+- deliverable_contract:根据任务性质决定是否输出 required_sections/forbidden_patterns。只有任务明确需要特定章节结构时才写;不确定就不输出(留空)
+- instances:所有节点都声明 instances 字段。可多次调度的节点列出实例清单;一次性节点留空数组[]。对于有非空 instances 的节点,blackboard_schema 里必须设计"{node_id}_remaining"字段(记录未完成实例,bounded=true)
+- instances 的目的和判定:instances 的目的是拆分长任务,保证每次 agent 执行的上下文短、聚焦单一子任务,提升成功率。同时支持精准重试(只重跑失败的实例,不重跑已完成的)。判定标准:如果一个节点的工作可以拆成多个独立子任务,每个子任务需要 agent 单独搜索/推理/写入,用 instances。如果一次 agent 执行能完成所有产出,不用 instances
 - instances 和 output 路径:有非空 instances 的节点,每个 output path 必须含 {instance} 占位符(如 solution/evidence/{instance}.md),每个实例写入不同文件。不含 {instance} 的路径校验不通过
-- context_inputs:每个节点声明执行时需要参考的 blackboard 字段。只注入这个节点真正需要的字段(如收集证据节点只需看 evidence_index,不需要看 review_notes)。不填或留空数组=注入全量(兜底)。_remaining 字段是代码维护的不需要放进 context_inputs。context_inputs 里的字段名必须在 blackboard_schema.fields 里存在
+- context_inputs:每个节点声明执行时需要参考的 blackboard 字段。只注入这个节点真正需要的字段。不填或留空数组=注入全量(兜底)。_remaining 字段是代码维护的不需要放进 context_inputs。context_inputs 里的字段名必须在 blackboard_schema.fields 里存在
 - entry_node 是调度大脑第一步选的节点(通常是最早的能力)
 - 用中文写 desc
 - required_capabilities 从 [web, browser, long_running] 里选
 - selected_executor 固定 "hermes"
 - skills/scripts 留空数组
 - clarifications 留空数组`;
+
+interface TaskTemplate {
+  chain: string;
+  guidance: string;
+}
+
+const TASK_TEMPLATES: Record<string, TaskTemplate> = {
+  research: {
+    chain: "collect_evidence(×N instances, 按维度/方案拆分) → plan_outline(light) → write_report(agent) → polish_report(agent) → review_report(agent)",
+    guidance: "调研型任务。需要先按维度收集证据,每个维度一个 instance,产出 evidence 文件。报告基于证据撰写。有 instances 的 output path 必须含 {instance} 占位符。",
+  },
+  creative: {
+    chain: "plan_outline(light) → write_report(agent) → polish_report(agent) → review_report(agent)",
+    guidance: "创作型任务(PRD/方案/设计文档)。不需要收集证据,直接规划大纲后写。大纲规划根据目标要求生成章节结构和要点,写入 report_outline。",
+  },
+  implementation: {
+    chain: "plan_tasks(light) → implement(×N instances, 按模块拆分) → test(agent) → review(agent)",
+    guidance: "实现型任务。按模块拆分实现步骤,每个模块一个 instance。需要有测试节点验证实现正确性。",
+  },
+};
+
+const CLASSIFIER_SYSTEM = `根据用户目标判断任务类型。返回 JSON: {"task_type": "research | creative | implementation"}
+
+判定标准:
+- research: 目标含"调研/了解/分析/对比/综述/市场调查"
+- creative: 目标含"输出/撰写/写/设计/PRD/方案/文档/规划"
+- implementation: 目标含"开发/搭建/部署/实现/构建/编码"
+拿不准的归 creative。`;
+
+async function classifyTask(client: LlmClient, goal: string, conclusions: Array<{ topic: string; conclusion: string }>): Promise<string> {
+  const conclusionText = conclusions.length > 0
+    ? conclusions.map(c => `[${c.topic}] ${c.conclusion}`).join("\n")
+    : "(无)";
+  const userPrompt = `目标: ${goal}\n\n澄清结论:\n${conclusionText}\n\n请判断任务类型。`;
+  const result = await client.completeJson<{ task_type?: string }>("composer", CLASSIFIER_SYSTEM, userPrompt);
+  const taskType = result.task_type ?? "creative";
+  return TASK_TEMPLATES[taskType] ? taskType : "creative";
+}
 
 export async function planGraphWorkflow(
   rootDir: string,
@@ -93,28 +129,34 @@ export async function planGraphWorkflow(
 ): Promise<GraphWorkflowSpec> {
   const state = await getProject(rootDir, projectId);
   const goal = state.project.goal;
-  const clarifications = state.status.clarifier?.clarifications ?? [];
+  const conclusions = state.status.clarifier?.conclusions ?? [];
 
   // 标记为 composing(前端据此显示进度)
   state.project.status = "composing";
   await saveProjectState(rootDir, state);
   bus?.publish(projectEvent("status_changed", projectId, { status: "composing" }));
 
+  // 第一步:分类任务类型
+  bus?.publish(projectEvent("plan_progress", projectId, { step: "classifying", message: "判断任务类型..." }));
+  const taskType = await classifyTask(client, goal, conclusions);
+  const template = TASK_TEMPLATES[taskType];
+  bus?.publish(projectEvent("plan_progress", projectId, { step: "classified", task_type: taskType, chain: template.chain }));
+
   // 机械重生成循环:Composer 生成 → 硬校验 → 充分性检查 → 有问题带问题清单重生成
   const MAX_REGEN = Number(process.env.VERANA_MAX_REGEN ?? 3);
   let lastIssues: string = "";
-  let lastValidSpec: GraphWorkflowSpec | null = null;  // 最后一次过了硬校验的 spec
+  let lastValidSpec: GraphWorkflowSpec | null = null;
 
   for (let attempt = 0; attempt < MAX_REGEN; attempt++) {
     bus?.publish(projectEvent("plan_progress", projectId, { step: "composing", attempt: attempt + 1, max: MAX_REGEN, message: `Composer 生成中(第${attempt + 1}次)...` }));
-    const userPrompt = buildComposerPrompt(goal, clarifications) + (lastIssues ? `\n\n【上轮问题清单(请修复)】\n${lastIssues}` : "");
+    const userPrompt = buildComposerPrompt(goal, conclusions, taskType, template) + (lastIssues ? `\n\n【上轮问题清单(请修复)】\n${lastIssues}` : "");
     // 推 LLM 输入给前端
     bus?.publish(projectEvent("plan_progress", projectId, { step: "llm_input", role: "composer", content: userPrompt.slice(0, 2000) }));
-    const llmResult = await client.completeJson<ComposerLlmResult>("composer", COMPOSER_SYSTEM, userPrompt);
+    const llmResult = await client.completeJson<ComposerLlmResult>("composer", COMPOSER_SYSTEM_BASE, userPrompt);
     // 推 LLM 输出给前端
     bus?.publish(projectEvent("plan_progress", projectId, { step: "llm_output", role: "composer", content: JSON.stringify(llmResult, null, 2).slice(0, 3000) }));
 
-    const spec = assembleSpec(projectId, goal, clarifications, llmResult);
+    const spec = assembleSpec(projectId, goal, conclusions, llmResult);
     const validation = validateGraphWorkflow(spec);
     if (!validation.passed) {
       bus?.publish(projectEvent("plan_progress", projectId, { step: "hard_check_failed", attempt: attempt + 1, message: `硬校验未通过: ${validation.errors.join("; ")}` }));
@@ -177,22 +219,30 @@ interface ComposerLlmResult {
   required_capabilities: string[];
 }
 
-function buildComposerPrompt(goal: string, clarifications: Array<{ q: string; a: string; risk: string }>): string {
+function buildComposerPrompt(goal: string, conclusions: Array<{ topic: string; conclusion: string }>, taskType: string, template: TaskTemplate): string {
   const lines = [`目标: ${goal}`, ""];
-  if (clarifications.length > 0) {
-    lines.push("已澄清信息:");
-    for (const entry of clarifications) {
-      lines.push(`  Q: ${entry.q}`);
-      lines.push(`  A: ${entry.a}`);
+  if (conclusions.length > 0) {
+    lines.push("澄清结论:");
+    for (const c of conclusions) {
+      lines.push(`  [${c.topic}] ${c.conclusion}`);
     }
   }
+  lines.push("");
+  lines.push(`## 本次任务类型: ${taskType}`);
+  lines.push("");
+  lines.push(`### 能力链骨架(参考,在此基础上细化):`);
+  lines.push(`  ${template.chain}`);
+  lines.push("");
+  lines.push(`### 关键注意事项:`);
+  lines.push(`  ${template.guidance}`);
   lines.push("");
   lines.push("请规划图工作流(能力清单 + 护栏 + blackboard schema)。");
   return lines.join("\n");
 }
 
-function assembleSpec(projectId: string, rawGoal: string, clarifications: Array<{ q: string; a: string; risk: string }>, r: ComposerLlmResult): GraphWorkflowSpec {
+function assembleSpec(projectId: string, rawGoal: string, conclusions: Array<{ topic: string; conclusion: string }>, r: ComposerLlmResult): GraphWorkflowSpec {
   const deliverableType = r.deliverable_type ?? "research";
+  const clarifications = conclusions.map(c => ({ q: c.topic, a: c.conclusion, risk: "" }));
   const deliverableContract = getProjectDeliverableContract({
     goal: {
       raw: rawGoal,

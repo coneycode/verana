@@ -19,12 +19,17 @@ function makeSpec(pid: string): GraphWorkflowSpec {
     clarifications: [], required_capabilities: ["web"], selected_executor: "hermes",
     agents: ["writer"], skills: [], scripts: [],
     capabilities: [
-      { id: "write_chapter", kind: "agent", desc: "写一章", outputs: [{ path: "solution/chapters/", desc: "章节正文" }], checks: [{ method: "llm_rubric", desc: ">=3000字" }], updates: ["summary"] },
+      { id: "draft_outline", kind: "light", desc: "规划大纲", outputs: [], checks: [{ method: "llm_rubric", desc: "大纲完整" }], updates: ["report_outline"] },
+      { id: "write_chapter", kind: "agent", desc: "写一章", outputs: [{ path: "solution/chapters/", desc: "章节正文", role: "deliverable" }], checks: [{ method: "llm_rubric", desc: ">=3000字" }], updates: ["summary"], context_inputs: ["report_outline"] },
+      { id: "polish_report", kind: "agent", desc: "润色", outputs: [{ path: "solution/final.md", desc: "最终稿", role: "deliverable" }], checks: [{ method: "llm_rubric", desc: "通顺" }], context_inputs: ["report_outline"] },
       { id: "update_memory", kind: "light", desc: "更新摘要", checks: [{ method: "llm_rubric", desc: "摘要有界" }], updates: ["summary"] },
     ],
     guardrails: { hard: { max_iterations: 30 }, soft: [], human_checkpoint_every: 3 },
-    blackboard_schema: { fields: [{ key: "summary", desc: "滚动摘要", bounded: true }] },
-    entry_node: "write_chapter",
+    blackboard_schema: { fields: [
+      { key: "summary", desc: "滚动摘要", bounded: true },
+      { key: "report_outline", desc: "报告大纲", bounded: true },
+    ] },
+    entry_node: "draft_outline",
     completion_criteria: ["写到20章"],
     hard_constraints: [],
     soft_guidance: [],
@@ -44,7 +49,7 @@ test("composeGraphWorkflow writes workflow.yaml + sets plan_review", async () =>
   // workflow.yaml 存在
   const raw = await readFile(join(projectPath(TMP, p.id), "solution", "workflow.yaml"), "utf8");
   const parsed = parse(raw) as GraphWorkflowSpec;
-  assert.equal(parsed.capabilities.length, 2);
+  assert.equal(parsed.capabilities.length, 4);
 });
 
 test("planGraphWorkflow (Composer 自动规划,不传 spec)", async () => {
@@ -69,16 +74,18 @@ test("composeGraphWorkflow preserves Composer capabilities without forcing evide
     ...makeSpec(p.id),
     goal: { raw: "调研产品", clarified: "调研产品", deliverable_type: "research", iterative: false, acceptance: ["结构化调研报告"] },
     capabilities: [
-      { id: "write_report", kind: "agent", desc: "调研并写报告", outputs: [{ path: "solution/research_report.md", desc: "调研报告" }], checks: [{ method: "llm_rubric", desc: "结构完整" }], updates: ["summary"] },
+      { id: "draft_outline", kind: "light", desc: "规划大纲", outputs: [], checks: [{ method: "llm_rubric", desc: "大纲完整" }], updates: ["report_outline"] },
+      { id: "write_report", kind: "agent", desc: "调研并写报告", outputs: [{ path: "solution/research_report.md", desc: "调研报告", role: "deliverable" }], checks: [{ method: "llm_rubric", desc: "结构完整" }], updates: ["summary"], context_inputs: ["report_outline"] },
+      { id: "polish_report", kind: "agent", desc: "润色", outputs: [{ path: "solution/final_report.md", desc: "最终报告", role: "deliverable" }], checks: [{ method: "llm_rubric", desc: "通顺" }], context_inputs: ["report_outline"] },
     ],
-    entry_node: "write_report",
+    entry_node: "draft_outline",
     completion_criteria: ["结构化调研报告通过验证"],
   };
   const normalized = await composeGraphWorkflow(TMP, p.id, fakeClient, spec);
   // 不再强制拆分:Composer 的能力清单原样保留
-  assert.equal(normalized.capabilities.length, 1);
-  assert.equal(normalized.capabilities[0].id, "write_report");
-  assert.equal(normalized.entry_node, "write_report");
+  assert.equal(normalized.capabilities.length, 3);
+  assert.equal(normalized.capabilities[1].id, "write_report");
+  assert.equal(normalized.entry_node, "draft_outline");
   // deliverable_contract base 默认为空(由 Composer 决定是否输出)
   assert.equal(normalized.deliverable_contract?.required_sections.length ?? 0, 0);
 });
