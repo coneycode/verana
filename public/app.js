@@ -372,11 +372,18 @@ function renderMain() {
     const conclusions = clarifier?.conclusions;
     const isConfirmed = clarifier?.status === 'goal_confirmed';
 
-    let html = '<div class="chat-box">';
+    let html = '<div class="chat-container">';
+    html += '<div class="chat-messages" id="chatMessages">';
 
     // 渲染已有对话
     for (const m of messages) {
-      html += '<div class="chat-msg ' + m.role + '"><div class="chat-bubble">' + escapeHtml(m.content) + '</div></div>';
+      const isAssistant = m.role === 'assistant';
+      const avatar = isAssistant ? '🤖' : '🧑';
+      const name = isAssistant ? '系统' : '你';
+      html += '<div class="chat-msg ' + m.role + '">';
+      html += '<div class="chat-avatar">' + avatar + '</div>';
+      html += '<div class="chat-content"><div class="chat-name">' + name + '</div><div class="chat-bubble">' + escapeHtml(m.content) + '</div></div>';
+      html += '</div>';
     }
 
     // 如果有结论，渲染结论卡片
@@ -393,12 +400,18 @@ function renderMain() {
     // 如果已确认，显示等待规划
     if (isConfirmed) {
       html += '<div class="guide"><div class="guide-title">目标已确认</div><div class="guide-desc muted">正在规划中...</div></div>';
-    } else if (!conclusions || conclusions.length === 0) {
-      // 对话模式：显示输入框
-      html += '<div class="chat-input-row"><input id="clarifyInput" placeholder="输入回答..." /><button class="primary" id="clarifySendBtn">发送</button></div>';
     }
 
-    html += '</div>';
+    html += '</div>'; // chat-messages
+
+    // 输入区（固定底部）
+    if (!isConfirmed && (!conclusions || conclusions.length === 0)) {
+      html += '<div class="chat-input-bar"><input id="clarifyInput" placeholder="输入回答，按 Enter 发送..." /><button class="primary" id="clarifySendBtn">发送</button></div>';
+    } else if (!isConfirmed && conclusions && conclusions.length > 0) {
+      // 结论卡片已展示，不显示输入框（用户点"继续补充"后才显示）
+    }
+
+    html += '</div>'; // chat-container
     el.innerHTML = html;
 
     // 事件绑定
@@ -415,8 +428,8 @@ function renderMain() {
       // 隐藏结论卡片，显示输入框
       const card = document.querySelector('.clarify-card');
       if (card) card.remove();
-      const box = document.querySelector('.chat-box');
-      if (box) box.insertAdjacentHTML('beforeend', '<div class="chat-input-row"><input id="clarifyInput" placeholder="补充信息..." /><button class="primary" id="clarifySendBtn">发送</button></div>');
+      const container = document.querySelector('.chat-container');
+      if (container) container.insertAdjacentHTML('beforeend', '<div class="chat-input-bar"><input id="clarifyInput" placeholder="补充信息，按 Enter 发送..." /><button class="primary" id="clarifySendBtn">发送</button></div>');
       const ni = $('clarifyInput'); const ns = $('clarifySendBtn');
       if (ni && ns) { ns.onclick = () => doClarifyChat(ni); ni.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doClarifyChat(ni); } }); ni.focus(); }
     };
@@ -971,6 +984,7 @@ async function loadDeliverables() {
 }
 
 async function maybeAutoStartClarify() {
+  if (!state) return;
   const phase = getPhase();
   if (phase === 'created' && !busy) {
     const msgCount = state.status.clarifier?.messages?.length ?? 0;

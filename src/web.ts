@@ -219,16 +219,22 @@ export function renderHomePage(): string {
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: rgba(82,82,91,0.15); border-radius: 3px; }
     ::-webkit-scrollbar-thumb:hover { background: rgba(82,82,91,0.25); }
-    /* chat bubbles */
-    .chat-box { max-width:640px; margin:0 auto; display:flex; flex-direction:column; gap:12px; }
-    .chat-msg { display:flex; gap:8px; max-width:80%; animation: fadeIn 0.2s ease; }
+    /* chat interface */
+    .chat-container { display:flex; flex-direction:column; height:100%; max-width:720px; margin:0 auto; }
+    .chat-messages { flex:1; overflow-y:auto; padding:16px 0; display:flex; flex-direction:column; gap:16px; }
+    .chat-msg { display:flex; gap:10px; max-width:75%; animation: fadeIn 0.2s ease; }
     .chat-msg.assistant { align-self: flex-start; }
     .chat-msg.user { align-self: flex-end; flex-direction: row-reverse; }
-    .chat-bubble { padding: 10px 14px; border-radius: var(--radius); font-size: 14px; line-height: 1.6; }
-    .chat-msg.assistant .chat-bubble { background: var(--surface); color: var(--text); }
-    .chat-msg.user .chat-bubble { background: var(--accent-bg); color: var(--text); }
-    .chat-input-row { display:flex; gap:8px; margin-top:8px; }
-    .chat-input-row input { flex:1; }
+    .chat-avatar { flex-shrink:0; width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:16px; background:var(--surface-hover); }
+    .chat-msg.user .chat-avatar { background:var(--accent-bg); }
+    .chat-content { display:flex; flex-direction:column; gap:2px; min-width:0; }
+    .chat-name { font-size:11px; color:var(--text-muted); font-weight:500; }
+    .chat-msg.user .chat-name { text-align:right; }
+    .chat-bubble { padding:10px 14px; border-radius:var(--radius); font-size:14px; line-height:1.6; word-break:break-word; }
+    .chat-msg.assistant .chat-bubble { background:var(--surface); color:var(--text); border:1px solid var(--border); }
+    .chat-msg.user .chat-bubble { background:var(--accent-bg); color:var(--text); }
+    .chat-input-bar { display:flex; gap:8px; padding:12px 0; border-top:1px solid var(--border); flex-shrink:0; }
+    .chat-input-bar input { flex:1; padding:10px 14px; }
     /* clarify conclusions card */
     .clarify-card { padding:20px; border-radius:var(--radius); background:var(--surface); box-shadow:var(--shadow); margin-top:12px; animation:fadeIn 0.3s ease; }
     .clarify-card-title { font-size:16px; font-weight:600; margin-bottom:12px; display:flex; align-items:center; gap:6px; }
