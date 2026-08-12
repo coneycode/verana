@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import type { LlmClient } from "./llm.js";
 import { getProject, projectPath, saveProjectState, writeYaml } from "./project-store.js";
-import type { CapabilityNode, DeliverableContract, GraphWorkflowSpec, GraphRuntime } from "./types.js";
+import type { CapabilityNode, DeliverableContract, GraphWorkflowSpec, GraphRuntime, Instance } from "./types.js";
 import { validateGraphWorkflow } from "./workflow-validator.js";
 import { checkSufficiency } from "./sufficiency-checker.js";
 import { projectEvent, type EventBus } from "./events.js";
@@ -36,7 +36,7 @@ const COMPOSER_SYSTEM_BASE = `你是一个 workflow 规划者(Composer)。你的
       "outputs": [{"path": "solution/xxx.md", "desc": "产出说明", "role": "evidence | deliverable | intermediate", "materializable": true}],
       "checks": [{"method": "llm_rubric | file_exists", "desc": "验收描述", "target": "路径(file_exists时)"}],
       "updates": ["blackboard字段名(如果这个节点负责更新记忆)"],
-      "instances": ["实例1", "实例2"],  // 可多次调度的节点列出实例;一次性节点留空数组[]
+      "instances": [{"name": "实例名", "scope": "该维度包含什么", "excludes": "该维度不包含什么(其他维度的内容)"}],  // 可多次调度的节点列出实例;一次性节点留空数组[]
       "context_inputs": ["blackboard字段名"]  // 这个节点执行时需要看哪些blackboard字段;不填或留空=注入全量
     }
   ],
@@ -74,6 +74,7 @@ const COMPOSER_SYSTEM_BASE = `你是一个 workflow 规划者(Composer)。你的
 - deliverable_contract:根据任务性质决定是否输出 required_sections/forbidden_patterns。只有任务明确需要特定章节结构时才写;不确定就不输出(留空)
 - instances:所有节点都声明 instances 字段。可多次调度的节点列出实例清单;一次性节点留空数组[]。对于有非空 instances 的节点,blackboard_schema 里必须设计"{node_id}_remaining"字段(记录未完成实例,bounded=true)
 - instances 的目的和判定:instances 的目的是拆分长任务,保证每次 agent 执行的上下文短、聚焦单一子任务,提升成功率。同时支持精准重试(只重跑失败的实例,不重跑已完成的)。判定标准:如果一个节点的工作可以拆成多个独立子任务,每个子任务需要 agent 单独搜索/推理/写入,用 instances。如果一次 agent 执行能完成所有产出,不用 instances
+- instances 的 scope/excludes:每个 instance 带 scope(该维度包含什么)和 excludes(该维度不包含什么,来自其他 instance 的维度)。executor 执行时只写 scope 范围内的内容,不写 excludes 里的内容。这避免跨维度内容混入
 - instances 和 output 路径:有非空 instances 的节点,每个 output path 必须含 {instance} 占位符(如 solution/evidence/{instance}.md),每个实例写入不同文件。不含 {instance} 的路径校验不通过
 - context_inputs:每个节点声明执行时需要参考的 blackboard 字段。只注入这个节点真正需要的字段。不填或留空数组=注入全量(兜底)。_remaining 字段是代码维护的不需要放进 context_inputs。context_inputs 里的字段名必须在 blackboard_schema.fields 里存在
 - entry_node 是调度大脑第一步选的节点(通常是最早的能力)
@@ -219,6 +220,20 @@ interface ComposerLlmResult {
   required_capabilities: string[];
 }
 
+/** 兼容旧格式:string[] → Instance[] */
+function normalizeInstances(raw: unknown): Instance[] | undefined {
+  if (!raw || !Array.isArray(raw)) return undefined;
+  if (raw.length === 0) return [];
+  return raw.map((item) => {
+    if (typeof item === "string") return { name: item };
+    if (typeof item === "object" && item !== null) {
+      const obj = item as { name?: string; scope?: string; excludes?: string };
+      return { name: obj.name ?? "", scope: obj.scope, excludes: obj.excludes };
+    }
+    return { name: String(item) };
+  });
+}
+
 function buildComposerPrompt(goal: string, conclusions: Array<{ topic: string; conclusion: string }>, taskType: string, template: TaskTemplate): string {
   const lines = [`目标: ${goal}`, ""];
   if (conclusions.length > 0) {
@@ -270,7 +285,7 @@ function assembleSpec(projectId: string, rawGoal: string, conclusions: Array<{ t
     })),
     checks: c.checks?.length ? c.checks : [{ method: "llm_rubric", desc: "产出满足要求" }],
     updates: c.updates,
-    instances: c.instances,
+    instances: normalizeInstances(c.instances),
     context_inputs: (c as { context_inputs?: string[] }).context_inputs,
   }));
 

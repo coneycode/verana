@@ -63,9 +63,15 @@ export interface CapabilityNode {
   /** 这个节点负责更新 blackboard 的哪些字段(更新记忆节点用) */
   updates?: string[];
   /** 实例清单:空/不写 = 一次性节点; 非空 = 可多次调度,每次处理一个实例 */
-  instances?: string[];
+  instances?: Instance[];
   /** 这个节点执行时需要注入哪些 blackboard 字段作为上下文;不填=fallback 全量 */
   context_inputs?: string[];
+}
+
+export interface Instance {
+  name: string;
+  scope?: string;      // 该维度包含什么
+  excludes?: string;   // 该维度不包含什么(来自其他维度)
 }
 
 export interface Guardrails {

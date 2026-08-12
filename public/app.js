@@ -49,8 +49,9 @@ function buildCapabilityGraph(spec) {
     if (c.instances && c.instances.length > 0) {
       for (let i = 0; i < c.instances.length; i++) {
         const inst = c.instances[i];
+        const instName = typeof inst === 'string' ? inst : (inst?.name || '');
         const instId = c.id + '_i' + i;
-        lines.push('  ' + instId + '("' + escapeHtml(inst) + '")');
+        lines.push('  ' + instId + '("' + escapeHtml(instName) + '")');
         lines.push('  class ' + instId + ' instance');
         lines.push('  ' + c.id + ' --> ' + instId);
       }
@@ -580,7 +581,7 @@ function renderPlanOverview(containerId) {
     const outputs = (cap.outputs||[]).map(o => '<div class="task-meta">产出: '+escapeHtml(o.path)+' — '+escapeHtml(o.desc)+'</div>').join('');
     const checks = (cap.checks||[]).map(c => '<div class="task-meta">验收: ['+escapeHtml(c.method)+'] '+escapeHtml(c.desc)+'</div>').join('');
     const updates = cap.updates?.length ? '<div class="task-meta">更新记忆: '+escapeHtml(cap.updates.join(', '))+'</div>' : '';
-    const instList = cap.instances?.length ? '<div class="task-meta">实例 ×'+cap.instances.length+': '+escapeHtml(cap.instances.join(' / '))+'</div>' : '<div class="task-meta">执行次数: 1次(一次性)</div>';
+    const instList = cap.instances?.length ? '<div class="task-meta">实例 ×'+cap.instances.length+': '+escapeHtml(cap.instances.map(i => typeof i === 'string' ? i : i?.name || '').join(' / '))+'</div>' : '<div class="task-meta">执行次数: 1次(一次性)</div>';
     html += '<div class="task-card"><div class="task-row"><b>'+escapeHtml(nodeLabel(cap.id))+'</b><span class="pill '+kindCls+'">'+escapeHtml(cap.kind)+'</span></div><div class="task-desc">'+escapeHtml(cap.desc)+'</div>'+instList+outputs+checks+updates+'</div>';
   }
   html += '</div>';

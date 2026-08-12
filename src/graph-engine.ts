@@ -95,7 +95,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
     if (cap.instances && cap.instances.length > 0) {
       const remainingKey = `${cap.id}_remaining`;
       if (!wf.blackboard[remainingKey] || !Array.isArray(wf.blackboard[remainingKey])) {
-        wf.blackboard[remainingKey] = [...cap.instances];
+        wf.blackboard[remainingKey] = cap.instances.map(i => i.name);
       }
     }
   }
@@ -454,8 +454,14 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     `节点: ${node.id} (${node.kind})`,
     `描述: ${node.desc}`,
     "",
-    // instance:scheduler 选的实例,告诉 executor 这次处理哪个
-    instance ? `本次处理实例: ${instance}` : "",
+    // instance:scheduler 选的实例,告诉 executor 这次处理哪个 + 维度边界
+    instance ? (() => {
+      const inst = node.instances?.find(i => i.name === instance);
+      const parts = [`本次处理实例: ${instance}`];
+      if (inst?.scope) parts.push(`该维度范围: ${inst.scope}`);
+      if (inst?.excludes) parts.push(`不要包含: ${inst.excludes}`);
+      return parts.join('\n');
+    })() : "",
     "",
     // 不塞全局 hard_constraints — 相关硬约束已通过 checks 分配到节点,塞全局会让节点做超出职责的事
     checksList ? `验收标准(必须满足,你会被按这些标准验证):\\n${checksList}` : "",
