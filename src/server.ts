@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 
 import { clarifyChat, buildGoalSummary, migrateClarifier } from "./clarifier.js";
+import { qaChat } from "./qa.js";
 import { EventBus, projectEvent } from "./events.js";
 import { HttpLlmClient, loadConfig, setLlmStatusCallback, type LlmClient } from "./llm.js";
 import { approveGate, deleteProject, getProject, listProjects, projectPath, rejectGate, saveProjectState, writeYaml } from "./project-store.js";
@@ -281,6 +282,32 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     return merged;
   });
 
+  // 问答：用户针对交付物提问
+  app.post<{ Params: { id: string }; Body: { question: string } }>("/projects/:id/qa-chat", async (request) => {
+    const state = await getProject(options.rootDir, request.params.id);
+    const question = request.body.question ?? "";
+    if (!question.trim()) return { answer: "请输入问题。", sources: [] };
+    const dir = projectPath(options.rootDir, request.params.id);
+    // 追加 user message
+    if (!state.status.qa_messages) state.status.qa_messages = [];
+    state.status.qa_messages.push({ role: "user", content: question });
+    // 检索 + 回答
+    const result = await qaChat(state, dir, question, client);
+    // 追加 assistant message
+    state.status.qa_messages.push({ role: "assistant", content: result.answer });
+    await saveProjectState(options.rootDir, state);
+    return result;
+  });
+
+  // 问答：清空对话历史
+  app.post<{ Params: { id: string } }>("/projects/:id/qa-clear", async (request) => {
+    const state = await getProject(options.rootDir, request.params.id);
+    state.status.qa_messages = [];
+    await saveProjectState(options.rootDir, state);
+    return { ok: true };
+  });
+
+  // 项目命名生成
   app.post<{ Body: { goal: string; name?: string } }>("/projects", async (request) => {
     const { createProject } = await import("./project-store.js");
     // 用户传了 name 就用,没传就 LLM 生成

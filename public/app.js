@@ -543,19 +543,46 @@ function renderMain() {
 
   // --- Final review ---
   if (phase === 'final_review') {
-    el.innerHTML = '<div class="guide"><div class="guide-title">审核最终方案</div><div class="guide-desc">所有 task 已完成并通过验证。下方是交付物,请审核后确认闭环。</div><div class="row"><button class="good" id="approveFinalBtn">通过,方案闭环</button><button class="bad" id="showRejectFinalBtn">打回重做</button><button class="secondary" id="exportMdBtn">导出 Markdown</button></div><div id="rejectFinalPanel" style="display:none;margin-top:8px"><textarea id="rejectFinalNote" placeholder="具体打回要求:哪里不对、要怎么改、期望什么结果"></textarea><button class="bad" id="rejectFinalBtn" style="margin-top:6px">确认打回</button></div></div><div id="deliverablesBox">正在加载交付物...</div>';
+    el.innerHTML = '<div class="guide"><div class="guide-title">审核最终方案</div><div class="guide-desc">所有 task 已完成并通过验证。请审核后确认闭环。</div><div class="row"><button class="good" id="approveFinalBtn">通过,方案闭环</button><button class="bad" id="showRejectFinalBtn">打回重做</button><button class="secondary" id="exportMdBtn">导出 Markdown</button></div><div id="rejectFinalPanel" style="display:none;margin-top:8px"><textarea id="rejectFinalNote" placeholder="具体打回要求:哪里不对、要怎么改、期望什么结果"></textarea><button class="bad" id="rejectFinalBtn" style="margin-top:6px">确认打回</button></div></div>'
+      + '<div class="del-tab-bar"><button class="del-tab active" data-tab="deliverables">交付物</button><button class="del-tab" data-tab="qa">问答</button></div>'
+      + '<div id="tab_deliverables" class="tab-panel"><div id="deliverablesBox">正在加载交付物...</div></div>'
+      + '<div id="tab_qa" class="tab-panel" style="display:none"></div>';
     $('approveFinalBtn').onclick = () => doApprove('final_review');
     $('showRejectFinalBtn').onclick = () => { $('rejectFinalPanel').style.display='block'; $('rejectFinalNote').focus(); };
     $('rejectFinalBtn').onclick = () => doReject('final_review');
     const exportBtn = $('exportMdBtn'); if (exportBtn) exportBtn.onclick = () => doExportMd();
+    // tab 切换
+    document.querySelectorAll('.del-tab').forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll('.del-tab').forEach(b => { b.classList.remove('active'); b.style.fontWeight = '400'; });
+        btn.classList.add('active'); btn.style.fontWeight = '600';
+        document.querySelectorAll('.tab-panel').forEach(p => p.style.display = 'none');
+        const target = $('tab_' + btn.dataset.tab);
+        if (target) target.style.display = '';
+        if (btn.dataset.tab === 'qa') renderQATab();
+      };
+    });
     loadDeliverables();
     return;
   }
 
   // --- Approved ---
   if (phase === 'approved') {
-    el.innerHTML = '<div class="guide"><div class="guide-title" style="color:var(--ok)">方案闭环完成</div><div class="guide-desc">方案阶段已结束。最终交付物如下:</div><div class="row"><button class="secondary" id="exportMdBtn">导出 Markdown</button></div></div><div id="deliverablesBox">正在加载交付物...</div>';
+    el.innerHTML = '<div class="guide"><div class="guide-title" style="color:var(--ok)">方案闭环完成</div><div class="guide-desc">方案阶段已结束。最终交付物如下:</div><div class="row"><button class="secondary" id="exportMdBtn">导出 Markdown</button></div></div>'
+      + '<div class="del-tab-bar"><button class="del-tab active" data-tab="deliverables">交付物</button><button class="del-tab" data-tab="qa">问答</button></div>'
+      + '<div id="tab_deliverables" class="tab-panel"><div id="deliverablesBox">正在加载交付物...</div></div>'
+      + '<div id="tab_qa" class="tab-panel" style="display:none"></div>';
     const exportBtn2 = $('exportMdBtn'); if (exportBtn2) exportBtn2.onclick = () => doExportMd();
+    document.querySelectorAll('.del-tab').forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll('.del-tab').forEach(b => { b.classList.remove('active'); b.style.fontWeight = '400'; });
+        btn.classList.add('active'); btn.style.fontWeight = '600';
+        document.querySelectorAll('.tab-panel').forEach(p => p.style.display = 'none');
+        const target = $('tab_' + btn.dataset.tab);
+        if (target) target.style.display = '';
+        if (btn.dataset.tab === 'qa') renderQATab();
+      };
+    });
     loadDeliverables();
     return;
   }
@@ -938,6 +965,67 @@ async function loadActiveStream() {
   const res = await fetch('/projects/'+selectedId+'/runs/'+activeRunId+'/stream');
   streamContent = await res.text();
   renderExecStream('execStreamArea');
+}
+
+function renderQATab() {
+  const el = $('tab_qa');
+  if (!el) return;
+  const messages = state?.status?.qa_messages ?? [];
+  let html = '<div class="chat-container">';
+  html += '<div class="chat-messages" id="qaMessages">';
+  for (const m of messages) {
+    const isAssistant = m.role === 'assistant';
+    const avatar = isAssistant ? '🤖' : '🧑';
+    const name = isAssistant ? '助手' : '你';
+    html += '<div class="chat-msg ' + m.role + '"><div class="chat-avatar">' + avatar + '</div><div class="chat-content"><div class="chat-name">' + name + '</div><div class="chat-bubble">' + escapeHtml(m.content) + '</div></div></div>';
+  }
+  html += '</div>';
+  html += '<div class="chat-input-bar"><input id="qaInput" placeholder="针对交付物提问,按 Enter 发送..." /><button class="secondary" id="qaClearBtn">清空上下文</button><button class="primary" id="qaSendBtn">发送</button></div>';
+  html += '</div>';
+  el.innerHTML = html;
+  // 滚动到底部
+  const msgEl = $('qaMessages');
+  if (msgEl) msgEl.scrollTop = msgEl.scrollHeight;
+  // 事件绑定
+  const sendBtn = $('qaSendBtn');
+  const input = $('qaInput');
+  if (sendBtn && input) {
+    sendBtn.onclick = () => doQAChat(input);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doQAChat(input); } });
+  }
+  const clearBtn = $('qaClearBtn');
+  if (clearBtn) clearBtn.onclick = () => doQAClear();
+}
+
+async function doQAChat(inputEl) {
+  const question = inputEl.value.trim();
+  if (!question) return;
+  inputEl.value = '';
+  setBusy(true);
+  try {
+    // 先追加用户气泡
+    const msgEl = $('qaMessages');
+    if (msgEl) {
+      msgEl.insertAdjacentHTML('beforeend', '<div class="chat-msg user"><div class="chat-avatar">🧑</div><div class="chat-content"><div class="chat-name">你</div><div class="chat-bubble">' + escapeHtml(question) + '</div></div></div>');
+      msgEl.scrollTop = msgEl.scrollHeight;
+    }
+    const res = await post('/projects/' + selectedId + '/qa-chat', { question });
+    if (msgEl) {
+      const sourcesText = res.sources?.length ? '<div class="muted" style="font-size:11px;margin-top:4px">来源: ' + escapeHtml(res.sources.join(', ')) + '</div>' : '';
+      msgEl.insertAdjacentHTML('beforeend', '<div class="chat-msg assistant"><div class="chat-avatar">🤖</div><div class="chat-content"><div class="chat-name">助手</div><div class="chat-bubble">' + escapeHtml(res.answer) + '</div>' + sourcesText + '</div></div>');
+      msgEl.scrollTop = msgEl.scrollHeight;
+    }
+  } catch(e) { alert(e.message); }
+  setBusy(false);
+}
+
+async function doQAClear() {
+  setBusy(true);
+  try {
+    await post('/projects/' + selectedId + '/qa-clear');
+    renderQATab();
+  } catch(e) { alert(e.message); }
+  setBusy(false);
 }
 
 async function loadDeliverables() {

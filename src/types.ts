@@ -205,6 +205,7 @@ export interface StatusRecord {
   clarifier?: ClarifierRecord;
   workflows: Partial<Record<WorkflowPhase, GraphRuntime>>;
   flow_type?: "graph";
+  qa_messages?: Array<{ role: "user" | "assistant"; content: string }>;
 }
 
 export interface ClarifierRecord {
