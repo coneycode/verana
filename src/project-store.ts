@@ -100,6 +100,12 @@ export async function approveGate(rootDir: string, projectId: string, gateId: st
     wf.awaiting = "none";
     wf.awaiting_reason = undefined;
     wf.awaiting_scene = undefined;
+    // 重置 node_retries:人审放行意味着用户决定继续,给节点重新开始的机会
+    if (wf.node_retries) {
+      for (const nodeId of Object.keys(wf.node_retries)) {
+        wf.node_retries[nodeId] = 0;
+      }
+    }
   }
 
   await appendDecision(rootDir, projectId, `approved ${gateId}`, note);
