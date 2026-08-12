@@ -396,6 +396,8 @@ async function collectMarkdownFiles(baseDir: string, currentDir: string, result:
   for (const entry of entries) {
     const fullPath = join(currentDir, entry.name);
     if (entry.isDirectory()) {
+      // 跳过 node_modules / .git / dist 等依赖/构建目录
+      if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "dist" || entry.name === "build") continue;
       await collectMarkdownFiles(baseDir, fullPath, result);
     } else if (entry.name.endsWith(".md")) {
       const relPath = fullPath.slice(baseDir.length + 1);
