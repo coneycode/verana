@@ -104,12 +104,18 @@ const TASK_TEMPLATES: Record<string, TaskTemplate> = {
   },
 };
 
-const CLASSIFIER_SYSTEM = `根据用户目标判断任务类型。返回 JSON: {"task_type": "research | creative | implementation"}
+const CLASSIFIER_SYSTEM = `根据用户目标和澄清结论，判断任务类型。返回 JSON: {"task_type": "research | creative | implementation", "reason": "判断理由"}
 
-判定标准:
-- research: 目标含"调研/了解/分析/对比/综述/市场调查"
-- creative: 目标含"输出/撰写/写/设计/PRD/方案/文档/规划"
-- implementation: 目标含"开发/搭建/部署/实现/构建/编码"
+判断原则(看语义不看关键词):
+- research: 目标是让读者了解/理解/分析某个事物的现状(如"调研""对比""综述")
+- creative: 目标是产出一份文档/方案/设计/PRD，让读者参考或照着做(如"输出""撰写""设计"一个方案)。即使方案里描述了实现流程，产出本身是文档不是代码
+- implementation: 目标是实际构建/部署/运行一个系统，产出是真实可运行的代码/项目
+
+关键区分:
+- "描述实现流程" vs "要求实现代码"：前者是 creative(方案文档里写流程)，后者是 implementation(真要写代码)
+- "设计架构" vs "搭建架构"：前者 creative，后者 implementation
+- 看澄清结论里用户对最终产出的期望，不看单个词
+
 拿不准的归 creative。`;
 
 async function classifyTask(client: LlmClient, goal: string, conclusions: Array<{ topic: string; conclusion: string }>): Promise<string> {
