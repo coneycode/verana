@@ -167,7 +167,46 @@ async function post(path, body = {}) { return api(path, { method:'POST', body: J
 
 async function loadProjects() {
   const projects = await api('/projects');
-  $('projects').innerHTML = projects.map(p => '<div class="project '+(p.id===selectedId?'active':'')+'"><div class="row" style="justify-content:space-between"><div data-id="'+escapeHtml(p.id)+'" style="flex:1;min-width:0"><b>'+escapeHtml(p.name||p.id)+'</b></div><button class="bad del-btn" data-id="'+escapeHtml(p.id)+'" style="padding:2px 8px;font-size:11px;flex-shrink:0">删除</button></div><div class="muted" data-id="'+escapeHtml(p.id)+'" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(p.goal||'')+'</div></div>').join('');
+  // 按周分组
+  const now = new Date();
+  const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const thisWeek = [];
+  const earlier = [];
+  for (const p of projects) {
+    const d = new Date(p.created_at || 0);
+    if (d >= weekAgo) thisWeek.push(p); else earlier.push(p);
+  }
+  // 排序：最新的在前
+  thisWeek.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+  earlier.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+  function projectHtml(p) {
+    return '<div class="project '+(p.id===selectedId?'active':'')+'"><div class="row" style="justify-content:space-between"><div data-id="'+escapeHtml(p.id)+'" style="flex:1;min-width:0"><b>'+escapeHtml(p.name||p.id)+'</b></div><button class="bad del-btn" data-id="'+escapeHtml(p.id)+'" style="padding:2px 8px;font-size:11px;flex-shrink:0">删除</button></div><div class="muted" data-id="'+escapeHtml(p.id)+'" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(p.goal||'')+'</div></div>';
+  }
+
+  let html = '';
+  // 本周项目
+  if (thisWeek.length > 0) {
+    html += '<div class="sidebar-group-title">本周 ('+thisWeek.length+')</div>';
+    html += thisWeek.map(projectHtml).join('');
+  }
+  // 更早的项目（折叠）
+  if (earlier.length > 0) {
+    html += '<div class="sidebar-group-title sidebar-toggle" id="earlierToggle" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center">更早 ('+earlier.length+') <span id="earlierArrow" style="font-size:10px">▶</span></div>';
+    html += '<div id="earlierProjects" style="display:none">'+earlier.map(projectHtml).join('')+'</div>';
+  }
+  $('projects').innerHTML = html;
+
+  // 折叠/展开
+  const toggle = $('earlierToggle');
+  if (toggle) {
+    toggle.onclick = () => {
+      const div = $('earlierProjects');
+      const arrow = $('earlierArrow');
+      if (div.style.display === 'none') { div.style.display = ''; arrow.textContent = '▼'; }
+      else { div.style.display = 'none'; arrow.textContent = '▶'; }
+    };
+  }
   document.querySelectorAll('.project [data-id]').forEach(el => el.addEventListener('click', () => selectProject(el.dataset.id)));
   document.querySelectorAll('.del-btn').forEach(el => el.addEventListener('click', (e) => { e.stopPropagation(); doDelete(el.dataset.id); }));
 }

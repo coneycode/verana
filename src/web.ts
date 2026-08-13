@@ -236,6 +236,8 @@ export function renderHomePage(): string {
     .chat-input-bar { display:flex; gap:8px; padding:12px 0; border-top:1px solid var(--border); flex-shrink:0; }
     .chat-input-bar input { flex:1; padding:10px 14px; }
     .tab-panel { padding-top:8px; }
+    .sidebar-group-title { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; padding:8px 4px 4px; }
+    .sidebar-toggle:hover { color:var(--accent); }
     .chat-thinking { color: var(--text-muted); font-style: italic; }
     .chat-thinking::after { content: '…'; animation: fadeIn 0.5s ease infinite alternate; }
     /* clarify conclusions card */
