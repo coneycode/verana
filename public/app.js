@@ -224,8 +224,8 @@ async function refresh() {
 function getPhase() {
   if (!state) return 'created';
   const clarifier = state.status.clarifier;
-  if (clarifier && clarifier.status !== 'goal_confirmed' && !state.status.workflows.solution) return 'clarifying';
-  const wf = state.status.workflows.solution;
+  if (clarifier && clarifier.status !== 'goal_confirmed' && !(state.status.workflows?.solution)) return 'clarifying';
+  const wf = state.status.workflows?.solution;
   if (!wf) return state.project.status;
   return wf.workflow_status;
 }
