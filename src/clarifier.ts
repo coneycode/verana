@@ -70,13 +70,13 @@ export async function clarifyChatStream(
 export function parseClarifyResponse(raw: string):
   | { type: "question"; content: string }
   | { type: "done"; conclusions: Array<{ topic: string; conclusion: string }> } {
-  // [QUESTION]...[/QUESTION]
-  const qMatch = raw.match(/\[QUESTION\]([\s\S]*?)\[\/QUESTION\]/);
+  // [QUESTION]...[/QUESTION] 或 [QUESTION]... 到末尾(无结束标记)
+  const qMatch = raw.match(/\[QUESTION\]([\s\S]*?)(\[\/QUESTION\]|$)/);
   if (qMatch) {
     return { type: "question", content: qMatch[1].trim() };
   }
-  // [DONE]...[/DONE]
-  const dMatch = raw.match(/\[DONE\]([\s\S]*?)\[\/DONE\]/);
+  // [DONE]...[/DONE] 或 [DONE]... 到末尾(无结束标记)
+  const dMatch = raw.match(/\[DONE\]([\s\S]*?)(\[\/DONE\]|$)/);
   if (dMatch) {
     const lines = dMatch[1].trim().split("\n").map(l => l.trim()).filter(Boolean);
     const conclusions: Array<{ topic: string; conclusion: string }> = [];
