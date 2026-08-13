@@ -85,7 +85,7 @@ export function buildSmartFakeClient(): FakeLlmClient {
     // Clarifier
     // 对话式澄清
     if (role === "composer" && system.includes("方案澄清助手")) {
-      return { json: { action: "done", conclusions: [{ topic: "通用", conclusion: "测试目标" }] } };
+      return { complete: "[DONE]\n[通用] 测试目标\n[/DONE]" };
     }
     // 任务分类器
     if (role === "composer" && system.includes("判断任务类型")) {

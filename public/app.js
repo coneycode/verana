@@ -1106,9 +1106,10 @@ async function sseClarifyChat(answer) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  let thinking = false;
   let msgEl = $('chatMessages') || $('qaMessages');
-  // 如果有 thinking，显示 loading 气泡
+  let bubbleEl = null;      // 逐字渲染的气泡 DOM
+  let rawText = '';          // 累积原始文本
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -1119,28 +1120,42 @@ async function sseClarifyChat(answer) {
       if (!line.startsWith('data: ')) continue;
       const data = JSON.parse(line.slice(6));
       if (data.type === 'thinking') {
-        thinking = true;
         if (msgEl) {
           msgEl.insertAdjacentHTML('beforeend', '<div class="chat-msg assistant" id="thinkingBubble"><div class="chat-avatar">🤖</div><div class="chat-content"><div class="chat-name">系统</div><div class="chat-bubble chat-thinking">正在思考...</div></div></div>');
           msgEl.scrollTop = msgEl.scrollHeight;
         }
-      } else {
-        // 移除 thinking 气泡
-        const tb = $('thinkingBubble');
-        if (tb) tb.remove();
-        if (data.type === 'question') {
-          if (msgEl) {
-            msgEl.insertAdjacentHTML('beforeend', '<div class="chat-msg assistant"><div class="chat-avatar">🤖</div><div class="chat-content"><div class="chat-name">系统</div><div class="chat-bubble">' + escapeHtml(data.content) + '</div></div></div>');
-            msgEl.scrollTop = msgEl.scrollHeight;
-          }
+      } else if (data.type === 'stream_start') {
+        // 移除 thinking 气泡，创建空气泡准备逐字渲染
+        const tb = $('thinkingBubble'); if (tb) tb.remove();
+        if (msgEl) {
+          msgEl.insertAdjacentHTML('beforeend', '<div class="chat-msg assistant" id="streamingBubble"><div class="chat-avatar">🤖</div><div class="chat-content"><div class="chat-name">系统</div><div class="chat-bubble"></div></div></div>');
+          msgEl.scrollTop = msgEl.scrollHeight;
+          bubbleEl = msgEl.querySelector('#streamingBubble .chat-bubble');
         }
+      } else if (data.type === 'delta') {
+        rawText += data.content;
+        if (bubbleEl) {
+          // 过滤掉标记符号，只显示标记内的文本
+          var display = rawText
+            .replace(/\[QUESTION\]/g, '')
+            .replace(/\[\/QUESTION\]/g, '')
+            .replace(/\[DONE\]/g, '')
+            .replace(/\[\/DONE\]/g, '')
+            .replace(/\[[^\]]+\]/g, function(m) { return m; }); // 保留 [话题] 标记
+          bubbleEl.textContent = display;
+          msgEl.scrollTop = msgEl.scrollHeight;
+        }
+      } else {
+        // question 或 done — 移除流式气泡
+        const sb = $('streamingBubble'); if (sb) sb.remove();
+        const tb = $('thinkingBubble'); if (tb) tb.remove();
         return data;
       }
     }
   }
-  // 移除 thinking 气泡
-  const tb = $('thinkingBubble');
-  if (tb) tb.remove();
+  // 清理
+  const sb = $('streamingBubble'); if (sb) sb.remove();
+  const tb = $('thinkingBubble'); if (tb) tb.remove();
   return null;
 }
 

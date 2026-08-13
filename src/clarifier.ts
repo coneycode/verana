@@ -3,10 +3,18 @@ import type { ProjectState, ClarifierRecord } from "./types.js";
 
 const CLARIFY_CHAT_SYSTEM = `你是一个方案澄清助手。根据用户目标和已有对话，生成下一个澄清问题或判定信息足够。
 
-返回 JSON:
-{ "action": "ask", "topic": "话题标签(2-6字)", "question": "问题", "reason": "为什么问这个" }
+用标记格式返回(不要用JSON):
+
+[QUESTION]
+问题内容
+[/QUESTION]
+
 或
-{ "action": "done", "conclusions": [{ "topic": "话题", "conclusion": "该话题的最终澄清结论(一句话)" }] }
+
+[DONE]
+[话题1] 结论1
+[话题2] 结论2
+[/DONE]
 
 规则:
 - 一次只问一个问题
@@ -15,7 +23,7 @@ const CLARIFY_CHAT_SYSTEM = `你是一个方案澄清助手。根据用户目标
 - 必须覆盖关键维度: 任务性质(做什么)/最终产出(文档/代码/数据)/范围边界/验收标准/约束条件
 - 特别注意:如果目标含"实现""流程""代码"等词但没明确最终产出是文档还是代码，必须问清楚
 - 覆够关键维度后判定 done: 任务性质/产出形式/范围边界/验收标准/约束条件
-- done 时必须返回 conclusions: 每个已澄清话题提炼一个结论(一句话)
+- done 时必须返回 conclusions: 每个话题一行,格式 [话题] 结论(一句话)
 - 用中文，口语化，像人对话一样自然`;
 
 /** 兼容：旧 clarifications 格式转 messages */
@@ -35,9 +43,13 @@ export function migrateClarifier(clarifier: Partial<ClarifierRecord> | undefined
   return { status: clarifier.status ?? "clarifying", messages, conclusions: clarifier.conclusions };
 }
 
-/** 对话式澄清：生成下一个问题或判定 done */
-export async function clarifyChat(state: ProjectState, client: LlmClient): Promise<
-  | { type: "question"; topic: string; content: string }
+/** 对话式澄清：生成下一个问题或判定 done（流式，逐 token 回调） */
+export async function clarifyChatStream(
+  state: ProjectState,
+  client: LlmClient,
+  onDelta?: (delta: string) => void,
+): Promise<
+  | { type: "question"; content: string }
   | { type: "done"; conclusions: Array<{ topic: string; conclusion: string }> }
 > {
   const goal = state.project.goal;
@@ -49,28 +61,45 @@ export async function clarifyChat(state: ProjectState, client: LlmClient): Promi
     : "(无)";
   const userPrompt = `目标: ${goal}\n\n对话历史:\n${dialogueText}\n\n请生成下一个问题或判定信息足够。`;
 
-  const result = await client.completeJson<{
-    action?: string;
-    topic?: string;
-    question?: string;
-    reason?: string;
-    conclusions?: Array<{ topic?: string; conclusion?: string }>;
-  }>("composer", CLARIFY_CHAT_SYSTEM, userPrompt);
+  const raw = await client.complete("composer", CLARIFY_CHAT_SYSTEM, userPrompt, onDelta);
 
-  if (result.action === "done" && result.conclusions?.length) {
-    const conclusions = result.conclusions
-      .filter(c => c.topic && c.conclusion)
-      .map(c => ({ topic: c.topic!, conclusion: c.conclusion! }));
-    if (conclusions.length > 0) {
-      return { type: "done", conclusions };
-    }
+  return parseClarifyResponse(raw);
+}
+
+/** 解析标记格式响应 */
+export function parseClarifyResponse(raw: string):
+  | { type: "question"; content: string }
+  | { type: "done"; conclusions: Array<{ topic: string; conclusion: string }> } {
+  // [QUESTION]...[/QUESTION]
+  const qMatch = raw.match(/\[QUESTION\]([\s\S]*?)\[\/QUESTION\]/);
+  if (qMatch) {
+    return { type: "question", content: qMatch[1].trim() };
   }
+  // [DONE]...[/DONE]
+  const dMatch = raw.match(/\[DONE\]([\s\S]*?)\[\/DONE\]/);
+  if (dMatch) {
+    const lines = dMatch[1].trim().split("\n").map(l => l.trim()).filter(Boolean);
+    const conclusions: Array<{ topic: string; conclusion: string }> = [];
+    for (const line of lines) {
+      const m = line.match(/^\[([^\]]+)\]\s*(.+)/);
+      if (m) conclusions.push({ topic: m[1].trim(), conclusion: m[2].trim() });
+    }
+    if (conclusions.length > 0) return { type: "done", conclusions };
+  }
+  // 兜底：没有标记，当 question 处理
+  return { type: "question", content: raw.trim() };
+}
 
-  return {
-    type: "question",
-    topic: result.topic ?? "通用",
-    content: result.question ?? "请补充更多信息。",
-  };
+/** 对话式澄清：生成下一个问题或判定 done（非流式，兼容旧调用） */
+export async function clarifyChat(state: ProjectState, client: LlmClient): Promise<
+  | { type: "question"; topic: string; content: string }
+  | { type: "done"; conclusions: Array<{ topic: string; conclusion: string }> }
+> {
+  const result = await clarifyChatStream(state, client);
+  if (result.type === "question") {
+    return { type: "question", topic: "通用", content: result.content };
+  }
+  return result;
 }
 
 /** 从 conclusions 生成目标总结（给 Composer 用） */

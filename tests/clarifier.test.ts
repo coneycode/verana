@@ -12,17 +12,11 @@ test("clarifyChat: LLM 返回 ask", async () => {
   const root = await mkdtemp(join(tmpdir(), "verana-clarify-chat-"));
   const project = await createProject(root, "调研海外红人监控系统");
   const client = new FakeLlmClient(() => ({
-    json: {
-      action: "ask",
-      topic: "平台",
-      question: "你要监控哪些平台?",
-      reason: "不澄清会偏掉",
-    },
+    complete: "[QUESTION]\n你要监控哪些平台?\n[/QUESTION]",
   }));
   const state = await getProject(root, project.id);
   const result = await clarifyChat(state, client);
   assert.equal(result.type, "question");
-  assert.equal(result.topic, "平台");
   assert.equal(result.content, "你要监控哪些平台?");
 });
 
@@ -38,13 +32,7 @@ test("clarifyChat: LLM 返回 done + conclusions", async () => {
     ],
   };
   const client = new FakeLlmClient(() => ({
-    json: {
-      action: "done",
-      conclusions: [
-        { topic: "平台", conclusion: "监控YouTube和TikTok两个平台" },
-        { topic: "规模", conclusion: "几百个红人" },
-      ],
-    },
+    complete: "[DONE]\n[平台] 监控YouTube和TikTok两个平台\n[规模] 几百个红人\n[/DONE]",
   }));
   const result = await clarifyChat(state, client);
   assert.equal(result.type, "done");

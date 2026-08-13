@@ -4,7 +4,7 @@ import { readFile, readdir, stat, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { parse } from "yaml";
 
-import { clarifyChat, buildGoalSummary, migrateClarifier } from "./clarifier.js";
+import { clarifyChat, clarifyChatStream, buildGoalSummary, migrateClarifier } from "./clarifier.js";
 import { qaChat } from "./qa.js";
 import { EventBus, projectEvent } from "./events.js";
 import { HttpLlmClient, loadConfig, setLlmStatusCallback, type LlmClient } from "./llm.js";
@@ -88,7 +88,6 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     });
     const send = (data: unknown) => reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
     try {
-      send({ type: "thinking" });
       const state = await getProject(options.rootDir, request.params.id);
       state.status.clarifier = migrateClarifier(state.status.clarifier);
       if (!state.status.clarifier.messages) state.status.clarifier.messages = [];
@@ -97,13 +96,19 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
         reply.raw.end();
         return;
       }
-      const result = await clarifyChat(state, client);
+      let started = false;
+      const result = await clarifyChatStream(state, client, (delta) => {
+        // 逐 token 推送
+        if (!started) { send({ type: "stream_start" }); started = true; }
+        send({ type: "delta", content: delta });
+      });
+      // 完整结果
       if (result.type === "question") {
         state.status.clarifier.messages.push({ role: "assistant", content: result.content });
         state.status.clarifier.status = "clarifying";
         await saveProjectState(options.rootDir, state);
         bus.publish(projectEvent("input_recorded", request.params.id));
-        send({ type: "question", topic: result.topic, content: result.content });
+        send({ type: "question", content: result.content });
       } else {
         state.status.clarifier.conclusions = result.conclusions;
         await saveProjectState(options.rootDir, state);
@@ -133,12 +138,16 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
       if (answer.trim()) {
         state.status.clarifier.messages.push({ role: "user", content: answer });
       }
-      const result = await clarifyChat(state, client);
+      let started = false;
+      const result = await clarifyChatStream(state, client, (delta) => {
+        if (!started) { send({ type: "stream_start" }); started = true; }
+        send({ type: "delta", content: delta });
+      });
       if (result.type === "question") {
         state.status.clarifier.messages.push({ role: "assistant", content: result.content });
         await saveProjectState(options.rootDir, state);
         bus.publish(projectEvent("input_recorded", request.params.id));
-        send({ type: "question", topic: result.topic, content: result.content });
+        send({ type: "question", content: result.content });
       } else {
         state.status.clarifier.conclusions = result.conclusions;
         await saveProjectState(options.rootDir, state);
