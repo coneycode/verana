@@ -87,12 +87,17 @@ export class HttpLlmClient implements LlmClient {
 
   async complete(role: ModelRole, system: string, user: string, onDelta?: (delta: string) => void): Promise<string> {
     const desc = inferLlmDescription(role, system);
+    const t0 = Date.now();
     globalLlmStatusCb?.({ phase: "calling", role, description: desc });
     try {
       const result = await this._doComplete(role, system, user, onDelta);
+      const elapsed = Date.now() - t0;
+      console.log(`[llm] ${role} completed in ${elapsed}ms`);
       globalLlmStatusCb?.({ phase: "done", role, description: desc });
       return result;
     } catch (e) {
+      const elapsed = Date.now() - t0;
+      console.log(`[llm] ${role} failed in ${elapsed}ms: ${(e as Error).message}`);
       globalLlmStatusCb?.({ phase: "error", role, description: desc });
       throw e;
     }

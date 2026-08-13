@@ -1083,7 +1083,7 @@ async function maybeAutoStartClarify() {
     const msgCount = state.status.clarifier?.messages?.length ?? 0;
     if (msgCount === 0) {
       busy = true;
-      try { await post('/projects/'+selectedId+'/clarify-chat', {}); }
+      try { await sseClarifyChat(); }
       catch(e) { /* ignore */ }
       finally { busy = false; }
       await refresh();
@@ -1091,13 +1091,72 @@ async function maybeAutoStartClarify() {
   }
 }
 
+// SSE 流式接收澄清对话
+async function sseClarifyChat(answer) {
+  const url = answer !== undefined
+    ? '/projects/' + selectedId + '/clarify-answer'
+    : '/projects/' + selectedId + '/clarify-chat';
+  const body = answer !== undefined ? { answer: answer } : {};
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let thinking = false;
+  let msgEl = $('chatMessages') || $('qaMessages');
+  // 如果有 thinking，显示 loading 气泡
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = JSON.parse(line.slice(6));
+      if (data.type === 'thinking') {
+        thinking = true;
+        if (msgEl) {
+          msgEl.insertAdjacentHTML('beforeend', '<div class="chat-msg assistant" id="thinkingBubble"><div class="chat-avatar">🤖</div><div class="chat-content"><div class="chat-name">系统</div><div class="chat-bubble chat-thinking">正在思考...</div></div></div>');
+          msgEl.scrollTop = msgEl.scrollHeight;
+        }
+      } else {
+        // 移除 thinking 气泡
+        const tb = $('thinkingBubble');
+        if (tb) tb.remove();
+        if (data.type === 'question') {
+          if (msgEl) {
+            msgEl.insertAdjacentHTML('beforeend', '<div class="chat-msg assistant"><div class="chat-avatar">🤖</div><div class="chat-content"><div class="chat-name">系统</div><div class="chat-bubble">' + escapeHtml(data.content) + '</div></div></div>');
+            msgEl.scrollTop = msgEl.scrollHeight;
+          }
+        }
+        return data;
+      }
+    }
+  }
+  // 移除 thinking 气泡
+  const tb = $('thinkingBubble');
+  if (tb) tb.remove();
+  return null;
+}
+
 async function doClarifyChat(inputEl) {
   const answer = inputEl.value.trim();
   if (!answer) return;
   inputEl.value = '';
   setBusy(true);
+  // 先追加用户气泡
+  const msgEl = $('chatMessages');
+  if (msgEl) {
+    msgEl.insertAdjacentHTML('beforeend', '<div class="chat-msg user"><div class="chat-avatar">🧑</div><div class="chat-content"><div class="chat-name">你</div><div class="chat-bubble">' + escapeHtml(answer) + '</div></div></div>');
+    msgEl.scrollTop = msgEl.scrollHeight;
+  }
   try {
-    await post('/projects/'+selectedId+'/clarify-answer', { answer });
+    await sseClarifyChat(answer);
     await refresh();
   } catch(e) { alert(e.message); }
   setBusy(false);

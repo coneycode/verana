@@ -236,6 +236,8 @@ export function renderHomePage(): string {
     .chat-input-bar { display:flex; gap:8px; padding:12px 0; border-top:1px solid var(--border); flex-shrink:0; }
     .chat-input-bar input { flex:1; padding:10px 14px; }
     .tab-panel { padding-top:8px; }
+    .chat-thinking { color: var(--text-muted); font-style: italic; }
+    .chat-thinking::after { content: '…'; animation: fadeIn 0.5s ease infinite alternate; }
     /* clarify conclusions card */
     .clarify-card { padding:20px; border-radius:var(--radius); background:var(--surface); box-shadow:var(--shadow); margin-top:12px; animation:fadeIn 0.3s ease; }
     .clarify-card-title { font-size:16px; font-weight:600; margin-bottom:12px; display:flex; align-items:center; gap:6px; }

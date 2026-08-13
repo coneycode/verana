@@ -79,50 +79,76 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   });
 
   // 一次性生成全部澄清问题
-  // 对话式澄清：获取下一个问题
-  app.post<{ Params: { id: string } }>("/projects/:id/clarify-chat", async (request) => {
-    const state = await getProject(options.rootDir, request.params.id);
-    state.status.clarifier = migrateClarifier(state.status.clarifier);
-    if (!state.status.clarifier.messages) state.status.clarifier.messages = [];
-    if (state.status.clarifier.status === "goal_confirmed") {
-      return { type: "done", conclusions: state.status.clarifier.conclusions ?? [] };
+  // 对话式澄清：获取下一个问题 (SSE 流式)
+  app.post<{ Params: { id: string } }>("/projects/:id/clarify-chat", async (request, reply) => {
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    });
+    const send = (data: unknown) => reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+    try {
+      send({ type: "thinking" });
+      const state = await getProject(options.rootDir, request.params.id);
+      state.status.clarifier = migrateClarifier(state.status.clarifier);
+      if (!state.status.clarifier.messages) state.status.clarifier.messages = [];
+      if (state.status.clarifier.status === "goal_confirmed") {
+        send({ type: "done", conclusions: state.status.clarifier.conclusions ?? [] });
+        reply.raw.end();
+        return;
+      }
+      const result = await clarifyChat(state, client);
+      if (result.type === "question") {
+        state.status.clarifier.messages.push({ role: "assistant", content: result.content });
+        state.status.clarifier.status = "clarifying";
+        await saveProjectState(options.rootDir, state);
+        bus.publish(projectEvent("input_recorded", request.params.id));
+        send({ type: "question", topic: result.topic, content: result.content });
+      } else {
+        state.status.clarifier.conclusions = result.conclusions;
+        await saveProjectState(options.rootDir, state);
+        bus.publish(projectEvent("input_recorded", request.params.id));
+        send({ type: "done", conclusions: result.conclusions });
+      }
+    } catch (e) {
+      send({ type: "error", message: (e as Error).message });
     }
-    const result = await clarifyChat(state, client);
-    if (result.type === "question") {
-      state.status.clarifier.messages.push({ role: "assistant", content: result.content });
-      state.status.clarifier.status = "clarifying";
-      await saveProjectState(options.rootDir, state);
-      bus.publish(projectEvent("input_recorded", request.params.id));
-      return { type: "question", topic: result.topic, content: result.content };
-    } else {
-      state.status.clarifier.conclusions = result.conclusions;
-      await saveProjectState(options.rootDir, state);
-      bus.publish(projectEvent("input_recorded", request.params.id));
-      return { type: "done", conclusions: result.conclusions };
-    }
+    reply.raw.end();
   });
 
-  // 对话式澄清：用户回答
-  app.post<{ Params: { id: string }; Body: { answer: string } }>("/projects/:id/clarify-answer", async (request) => {
-    const state = await getProject(options.rootDir, request.params.id);
-    state.status.clarifier = migrateClarifier(state.status.clarifier);
-    if (!state.status.clarifier.messages) state.status.clarifier.messages = [];
-    const answer = request.body.answer ?? "";
-    if (answer.trim()) {
-      state.status.clarifier.messages.push({ role: "user", content: answer });
+  // 对话式澄清：用户回答 (SSE 流式)
+  app.post<{ Params: { id: string }; Body: { answer: string } }>("/projects/:id/clarify-answer", async (request, reply) => {
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    });
+    const send = (data: unknown) => reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+    try {
+      send({ type: "thinking" });
+      const state = await getProject(options.rootDir, request.params.id);
+      state.status.clarifier = migrateClarifier(state.status.clarifier);
+      if (!state.status.clarifier.messages) state.status.clarifier.messages = [];
+      const answer = request.body.answer ?? "";
+      if (answer.trim()) {
+        state.status.clarifier.messages.push({ role: "user", content: answer });
+      }
+      const result = await clarifyChat(state, client);
+      if (result.type === "question") {
+        state.status.clarifier.messages.push({ role: "assistant", content: result.content });
+        await saveProjectState(options.rootDir, state);
+        bus.publish(projectEvent("input_recorded", request.params.id));
+        send({ type: "question", topic: result.topic, content: result.content });
+      } else {
+        state.status.clarifier.conclusions = result.conclusions;
+        await saveProjectState(options.rootDir, state);
+        bus.publish(projectEvent("input_recorded", request.params.id));
+        send({ type: "done", conclusions: result.conclusions });
+      }
+    } catch (e) {
+      send({ type: "error", message: (e as Error).message });
     }
-    const result = await clarifyChat(state, client);
-    if (result.type === "question") {
-      state.status.clarifier.messages.push({ role: "assistant", content: result.content });
-      await saveProjectState(options.rootDir, state);
-      bus.publish(projectEvent("input_recorded", request.params.id));
-      return { type: "question", topic: result.topic, content: result.content };
-    } else {
-      state.status.clarifier.conclusions = result.conclusions;
-      await saveProjectState(options.rootDir, state);
-      bus.publish(projectEvent("input_recorded", request.params.id));
-      return { type: "done", conclusions: result.conclusions };
-    }
+    reply.raw.end();
   });
 
   // 对话式澄清：用户确认结论
