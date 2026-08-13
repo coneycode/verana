@@ -1134,14 +1134,16 @@ async function sseClarifyChat(answer) {
         }
       } else if (data.type === 'delta') {
         rawText += data.content;
-        if (bubbleEl) {
-          // 过滤掉标记符号，只显示标记内的文本
+        // 检测到 [DONE] 标记：停止逐字渲染（结论走结论卡片，不走气泡）
+        if (rawText.includes('[DONE]')) {
+          // 移除流式气泡，等最终 done 事件
+          const sb = $('streamingBubble'); if (sb) sb.remove();
+          bubbleEl = null;
+        } else if (bubbleEl) {
+          // 只显示 [QUESTION] 标记内的文本，过滤掉标记符号
           var display = rawText
             .replace(/\[QUESTION\]/g, '')
-            .replace(/\[\/QUESTION\]/g, '')
-            .replace(/\[DONE\]/g, '')
-            .replace(/\[\/DONE\]/g, '')
-            .replace(/\[[^\]]+\]/g, function(m) { return m; }); // 保留 [话题] 标记
+            .replace(/\[\/QUESTION\]/g, '');
           bubbleEl.textContent = display;
           msgEl.scrollTop = msgEl.scrollHeight;
         }
