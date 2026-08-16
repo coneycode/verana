@@ -205,7 +205,7 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   app.post<{ Params: { id: string } }>("/projects/:id/run", async (request) => {
     runGraphProject(options.rootDir, request.params.id, client, bus)
       .then(() => { bus.publish(projectEvent("run_completed", request.params.id)); })
-      .catch((err: Error) => { console.error(`[run] ${request.params.id} failed:`, err.message); bus.publish(projectEvent("run_failed", request.params.id, { error: err.message })); });
+      .catch((err: Error) => { console.error(`[run] ${request.params.id} failed:`, err); bus.publish(projectEvent("run_failed", request.params.id, { error: err.message })); });
     return { status: "running", projectId: request.params.id };
   });
 
