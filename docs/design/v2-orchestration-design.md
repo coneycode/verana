@@ -1,8 +1,8 @@
 # Verana — 项目制 Agent Workflow 交付脚手架 设计文档
 
 状态: 图工作流 / 动态调度闭环已进入实现打磨阶段(此前静态 DAG 已推翻)
-版本: v0.5(完备体系落地同步 — 事前自检 + 事后归因 + 控制面时间线)
-最后更新: 2026-07-15
+版本: v0.6(max-turns 动态调整 + 执行续接机制)
+最后更新: 2026-08-14
 本文记录已锁定的设计决策。每节标注:
 [LOCKED] 已确认 · [DEFERRED] 推迟 · [PARTIAL] 部分实现 · [OUTLINE] 仅预留接口
 
@@ -101,9 +101,12 @@ scheduler 路由动作分两档:
 - **低频重大决策 → 转人审**:删/改现有节点、回澄清/重规划(E)、调整完成标准、终止任务、
   重试耗尽(maxRetries 硬护栏触发,materialize 不计入)。
 
-**执行资源/配置问题(429/超时/max_turns 不足)不进根因分类** —— 它是脚手架自己的配置
+**执行资源/配置问题(429/超时)不进根因分类** —— 它是脚手架自己的配置
 问题,不是任务链路根因。由脚手架层确定性兜底(自动放宽参数/限流等待),不占决策,
 跟"429 等 60 秒"同类。
+
+**max-turns 不足**单独处理,不走六类根因——它是"任务未完成"不是"任务做错了"。
+处理机制见第 4.5 节。
 
 ### 0.5.5 归因错误的处理
 
@@ -286,6 +289,88 @@ X 能力、缺口理由、Composer 凭什么判定合理" 必须完整留痕)。
 - **独立检查**:每步决策后单独过一遍软护栏(独立模型),**不并进调度决策**
   —— 安全判断不能和干活决策共用一个模型调用被稀释;盯红线要专门一道关
 - 代价:每步多一次护栏检查(很轻),换安全,值得
+
+---
+
+## 4.5 max-turns 动态调整 + 执行续接 [LOCKED 2026-08-14]
+
+### 问题
+
+max-turns 是兜底安全阀,不是任务完成标准。但执行到达 max-turns 时,直接判 fail 有问题:
+- executor 可能做了大量工作(搜索+收集),只是没来得及写文件
+- 从头 retry 等于扔掉全部工作,下一次还是同样的轮次不够
+- 某些任务(开放式搜索)需要的轮次不可预测,预先设定的 max-turns 可能就是不够
+
+### 定位
+
+max-turns hit 不是"任务做错了"(verdict fail),是"任务未完成"。
+不进六类根因分类,不交给 diagnostician 归因。
+交给 Composer 复核——因为判断"继续是否有帮助"本质是规划层面的判断:
+节点任务是否太重?产出标准是否不合理?还是值得继续执行?
+
+### 流程
+
+```
+executor 执行到达 max-turns
+  ↓
+代码机械收集执行轨迹事实(不调 LLM):
+  - 产出文件状态:不存在 / 存在但内容少 / 存在且内容在增长
+  - stream 行为特征:最后 N 轮在搜索 / 在写文件 / 在重复相同动作
+  - 已用轮次 / 是否已 resume 过
+  ↓
+Composer 复核(拿 spec + 执行轨迹事实 + 当前产出状态):
+  ├─ 节点任务太重 → 拆分节点,重新规划受影响部分
+  ├─ 产出标准不合理 → 调整 check/产出要求
+  ├─ 值得继续 → action="resume"(hermes --resume <session_id>,上调 max-turns)
+  └─ 不值得继续 → 交 scheduler 正常路由(retry/materialize/human)
+  ↓
+Composer 的判断结果写回给 scheduler,scheduler 按结果路由(铁律:调度决策唯一出口是 scheduler)
+```
+
+### 执行续接(resume)
+
+"继续执行"不是从头 retry,是续接同一个 executor 会话:
+- executor (hermes CLI) 退出时 raw stdout 里有 session_id
+- resume = `hermes --resume <session_id> --max-turns <上调值>`
+- 同一会话上下文——executor 记得自己搜了什么、写到哪了
+- 同一个 run-id(verdict/artifact 都按 run-id 存,resume 是这个 run 的延续)
+
+### 防呆
+
+- 同一个 run 最多 resume 1 次(第二次 hit 直接判 fail,走正常 fail 流程)
+- max-turns 累计上限 = 原值的 2 倍(如 120 → 最多 240,到了直接 fail)
+- resume 后 verdict 仍按正常流程走(artifact contract → verifier)
+
+### 机械收集的事实(喂给 Composer)
+
+| 事实 | 怎么取 | 用途 |
+|------|--------|------|
+| 产出文件状态 | 检查 node.outputs 声明路径:不存在/大小/行数/最后修改时间 | 判断 executor 是否在产出 |
+| stream 最后 N 轮行为 | 从 stream.md/raw-stdout 提取最后 N 轮的工具调用类型 | 判断在搜索/在写/在循环 |
+| 是否重复搜索 | 最后 N 轮的搜索关键词去重率 | 判断是否陷入循环 |
+| 已用轮次 | executor 返回的轮次计数 | 判断消耗程度 |
+| 是否已 resume 过 | run 状态里记的 resume 标记 | 防呆:最多 resume 1 次 |
+
+### Composer 复核的输入/输出
+
+输入:
+- 原节点 spec(任务描述/产出要求/checks)
+- 执行轨迹事实(机械收集的上表)
+- 当前产出状态(产出文件的当前内容摘要)
+
+输出:
+```json
+{
+  "verdict": "resume" | "reframe" | "abandon",
+  "reason": "判断理由",
+  "reframe_action": "split_node" | "adjust_check" | null,
+  "new_max_turns": 200  // resume 时的新上限
+}
+```
+
+- resume:值得继续,上调 max-turns,续接执行
+- reframe:节点设计有问题,需要拆分或调整(交回 scheduler 路由)
+- abandon:不值得继续,交 scheduler 走正常 fail 路由
 
 ---
 
@@ -583,7 +668,7 @@ selected(调度选中) → running → artifact_collected → artifact_validated
 ```
 loop:
   check_hard_guardrails()                      # 碰硬护栏 → 强制停
-  maybe_human_checkpoint()                     # 阶段性检查点 → 人审
+  maybe_human_checkpoint()                     # 阶段检查点 → 人审
   progress_truth = buildProgressTruth(events)  # 从 verdict/diagnosis 事件机械折叠,不读 claim
   decision = scheduler(progress_truth, blackboard, 能力清单, 护栏)  # 唯一调度出口
   append_event(decision)
@@ -593,8 +678,17 @@ loop:
     request_capability → Composer 复核 → 新增节点继续 / 停问人
     is_complete=true → workflow → final_review; break
     execute/retry/switch → node = decision.next_node
+    resume → node = decision.next_node, 用 session_id 续接执行(见 4.5 节)
   check_soft_guardrails(独立模型,node)          # 执行前软护栏 → 停,转人审
   run = execute(node, blackboard)              # 跑节点,产出 claim + 工作区文件变更
+  if executor hit max-turns(未正常退出):        # max-turns hit → 不直接判 fail
+    facts = collectExecutionFacts(run, node)   # 机械收集执行轨迹事实
+    review = composerReviewMaxTurns(node, spec, facts)  # Composer 复核
+    append_event(max_turns_review, review)
+    switch review.verdict:
+      resume → run = resumeExecution(run, node, review.new_max_turns)  # 续接同一会话
+      reframe → continue  # 下一轮 scheduler 按新规划路由
+      abandon → continue   # 下一轮 scheduler 走正常 fail 路由
   artifact = collect_artifacts(node.outputs)   # 从声明输出收集磁盘产物,冻结 snapshot
   append_event(artifact_collected)
   contract = validate_artifact_contract(artifact)
@@ -767,6 +861,7 @@ verifier 主力 command/tests + anti-cheat、workdir git 隔离 + 每节点 diff
 - [x] 2. 执行模型:图工作流(能力清单 + 护栏 + blackboard)
 - [x] 3. 调度大脑(运行时核心)
 - [x] 4. 护栏(硬 + 软)
+- [~] 4.5 max-turns 动态调整 + 执行续接(2026-08-14 锁定,实现中)
 - [x] 5. 落盘 + 恢复(事件日志 + 快照)
 - [x] 6. Verifier / 验证
 - [x] 7. 人审(中粒度,四场景)

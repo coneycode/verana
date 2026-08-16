@@ -1,6 +1,6 @@
 # Verana — 名词与流程总览
 
-状态: [LOCKED] 2026-07-27
+状态: [LOCKED] 2026-08-14
 关联总纲: `v2-orchestration-design.md`
 
 本文是 Verana 所有名词的权威索引。每个名词只定义一次,说明做什么、不做什么、跟谁配合。
@@ -74,7 +74,9 @@
 | Diagnosis | diagnostician 的归因结果:六类根因(A-F)之一 + 说明 |
 | Scheduler Decision | scheduler 的决策输出:next_node + reason + action + is_complete |
 | Root Cause Type | 六类:A=指令不具体 B=能力缺口 C=上下文错 D=标准不合理 E=目标问题 F=产物契约失败 |
-| Action | scheduler 路由动作:execute/retry_with_feedback/switch_node/request_capability/skip_node/materialize/human |
+| Action | scheduler 路由动作:execute/retry_with_feedback/switch_node/request_capability/skip_node/materialize/human/resume |
+| Max-turns Review | Composer 对 max-turns hit 的复核:resume(续接)/reframe(拆分调整)/abandon(放弃) |
+| Execution Facts | 机械收集的执行轨迹事实(产出文件状态/stream行为/已用轮次),喂给 Composer 复核 |
 
 ---
 
@@ -149,7 +151,31 @@
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.2 Artifact Contract 链路(事实层,代码驱动)
+### 3.2 max-turns 动态调整流程(执行续接)
+
+```
+executor 执行到达 max-turns
+  │
+  ▼
+代码机械收集执行轨迹事实(不调 LLM):
+  - 产出文件状态(不存在/内容少/在增长)
+  - stream 最后 N 轮行为(搜索/写文件/重复)
+  - 已用轮次 / 是否已 resume 过
+  │
+  ▼
+Composer 复核(拿 spec + 执行轨迹事实)
+  │
+  ├─ resume → hermes --resume <session_id> --max-turns <上调值>
+  │           ↓ 续接同一会话,执行完成后正常走 artifact contract → verifier
+  │
+  ├─ reframe → 拆分节点/调整 check → 交 scheduler 路由
+  │
+  └─ abandon → 交 scheduler 走正常 fail 路由(retry/materialize/human)
+
+防呆:同一 run 最多 resume 1 次;累计上限 = 原值 × 2
+```
+
+### 3.3 Artifact Contract 链路(事实层,代码驱动)
 
 ```
 Executor 执行完
@@ -188,7 +214,7 @@ Artifact Report(passed/failed + failure_codes)
   └─ pass → verifier 做语义判定
 ```
 
-### 3.3 SSE 事件流(控制面)
+### 3.4 SSE 事件流(控制面)
 
 ```
 后端 EventBus
@@ -208,6 +234,7 @@ server SSE 端点
   ├─ llm_stream → timeline block 实时输出(不触发 refresh)
   ├─ node_selected/verdict/diagnosis/artifact_* → timeline 更新 + refresh
   ├─ scheduler_decision → timeline 更新 + refresh
+  ├─ max_turns_review → Composer 复核结果展示 + refresh
   ├─ human_required → 人审卡 + refresh
   └─ 未知事件 → refresh(不丢弃)
 ```
@@ -249,6 +276,9 @@ Scheduler(看进度真相+blackboard) → 选节点
 7. scaffold 不越界做规划(不帮 Composer 拆节点)
 8. deliverable_contract 做不到通用就不硬做(没有 base 默认章节)
 9. SSE 发 unnamed event,前端 onmessage 统一分发
+10. max-turns hit 不直接判 fail,交 Composer 复核(机械事实+LLM判断)
+11. resume 不从头开始,续接同一 executor 会话(hermes --resume)
+12. 同一 run 最多 resume 1 次,max-turns 累计上限 = 原值 × 2
 
 ---
 
