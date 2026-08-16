@@ -289,9 +289,10 @@ Scheduler(看进度真相+blackboard) → 选节点
 ### 5.1 节点拆细 + 精准重试
 
 [LOCKED 2026-08-14] 已落地:Composer 按任务类型生成节点链。research 型用
-plan_outline → research(×N instances) → synthesize → polish → review 链路。
-- research 节点只搜索+记录(不整理),synthesize 综合成报告
-- 开放式搜索和确定性写作分离到不同节点
+plan_outline → search(×N instances) → write_evidence(×N instances) → synthesize → polish → review 链路。
+- search 节点边搜边写原始结果(solution/search/{instance}.md),不要求结构化
+- write_evidence 从 search 文件整理成结构化证据(solution/evidence/{instance}.md),只整理不搜索
+- 开放式搜索和确定性整理分离到不同节点
 - 节点间通过 blackboard + 声明 outputs 解耦
 - instances 拆分长任务,精准重试只重跑失败实例
 
