@@ -18,6 +18,7 @@ export interface AgentRun {
   sessionId?: string;   // hermes session id(可用于 resume)
   exitCode: number;
   raw: string;          // 完整 stdout(调试用)
+  hitMaxTurns?: boolean; // executor 是否因 max-turns 限制退出
 }
 
 export interface ExecutorAdapter {
@@ -26,6 +27,8 @@ export interface ExecutorAdapter {
   probe(): Promise<ProbeResult>;
   /** 在 workdir 启动 executor 跑一个重节点。prompt 是完整指令(含上下文)。返回 agent 产出 */
   execute(prompt: string, workdir: string, opts?: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number; maxReruns?: number; onOutputLine?: (line: string) => void }): Promise<AgentRun>;
+  /** 续接上次执行(resume)。用 session_id 恢复同一会话,给新的 max-turns */
+  resume?(sessionId: string, workdir: string, opts: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number; onOutputLine?: (line: string) => void }): Promise<AgentRun>;
 }
 
 export class HermesAdapter implements ExecutorAdapter {
@@ -89,6 +92,29 @@ export class HermesAdapter implements ExecutorAdapter {
       // 不加 -Q:保留工具调用过程输出(web_search/browser 预览),实时推给前端
     ];
 
+    return this._spawnHermes(args, workdir, timeoutMs, onOutputLine);
+  }
+
+  /** 续接上次执行:用 hermes --resume <session_id> 恢复同一会话 */
+  async resume(sessionId: string, workdir: string, opts: { maxTurns?: number; toolsets?: string[]; timeoutMs?: number; onOutputLine?: (line: string) => void }): Promise<AgentRun> {
+    const maxTurns = opts.maxTurns ?? 90;
+    const timeoutMs = opts.timeoutMs ?? 600_000;
+    const toolsets = opts.toolsets ?? ["web"];
+    const onOutputLine = opts.onOutputLine;
+
+    const args = [
+      "--resume", sessionId,
+      "-q", "继续执行。完成上次未完成的工作,把产出写入指定文件。",
+      "--max-turns", String(maxTurns),
+      "-t", toolsets.join(","),
+      "--yolo",
+    ];
+
+    return this._spawnHermes(args, workdir, timeoutMs, onOutputLine);
+  }
+
+  /** 共用的 spawn + stdout 解析逻辑 */
+  private async _spawnHermes(args: string[], workdir: string, timeoutMs: number, onOutputLine?: (line: string) => void): Promise<AgentRun> {
     return new Promise<AgentRun>((resolve) => {
       const child = spawn(this.command, args, {
         cwd: workdir,
@@ -144,6 +170,16 @@ export class HermesAdapter implements ExecutorAdapter {
           while (claimStart < lines.length && lines[claimStart].trim() === "") claimStart++;
         }
 
+        // 从 stdout 里提取 session_id(Resume this session with: hermes --resume <id>)
+        if (!sessionId) {
+          const resumeMatch = stdout.match(/hermes --resume (\S+)/);
+          if (resumeMatch) sessionId = resumeMatch[1];
+        }
+
+        // 检测 max-turns hit:hermes 输出里有 "max.*turn" 或 "turn.*limit" 或 "Max turns"
+        const hitMaxTurns = /max.*turn|turn.*limit|Max turns|reached.*turn/i.test(stdout)
+          || stdout.includes("Messages:") && stdout.includes("tool calls");  // 退化检测:有消息和工具调用但没有 hermes 块
+
         // 从 stdout 提取 hermes 的最终文字输出(╭─ ⚕ Hermes ─ 块)
         // 工具调用日志(┊ 开头)不进 claim,留在 raw/stdream 里
         const hermesBlocks: string[] = [];
@@ -184,7 +220,8 @@ export class HermesAdapter implements ExecutorAdapter {
           sessionId,
           exitCode: code ?? 0,
           raw: stdout,
-        });
+          hitMaxTurns,
+        } as AgentRun & { hitMaxTurns: boolean });
       });
 
       child.on("error", (err) => {

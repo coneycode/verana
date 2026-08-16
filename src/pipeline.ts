@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import type { LlmClient } from "./llm.js";
 import { getProject, projectPath, saveProjectState, writeYaml } from "./project-store.js";
-import type { CapabilityNode, DeliverableContract, GraphWorkflowSpec, GraphRuntime, Instance } from "./types.js";
+import type { CapabilityNode, DeliverableContract, GraphWorkflowSpec, GraphRuntime, Instance, ExecutionFacts, MaxTurnsReview } from "./types.js";
 import { validateGraphWorkflow } from "./workflow-validator.js";
 import { checkSufficiency } from "./sufficiency-checker.js";
 import { projectEvent, type EventBus } from "./events.js";
@@ -395,4 +395,69 @@ export async function composeGraphWorkflow(
   state.status.workflows.solution = runtime;
   await saveProjectState(rootDir, state);
   return normalizedSpec;
+}
+
+// ===== max-turns 动态调整:Composer 复核 =====
+
+const MAX_TURNS_REVIEW_SYSTEM = `你是一个 workflow 规划者(Composer)。执行器(executor)在执行一个节点时达到了最大轮次上限(max-turns),没有正常完成。
+
+你需要判断:继续给更多轮次是否有帮助?还是节点设计有问题?
+
+返回 JSON:
+{"verdict": "resume" | "reframe" | "abandon", "reason": "判断理由", "reframe_action": "split_node" | "adjust_check" | null, "new_max_turns": 数字}
+
+判断依据:
+- resume(继续):executor 在产出文件上有进展(文件在增长/在写文件),只是轮次不够。给它更多轮次继续。
+- reframe(重新规划):节点任务太重(搜索+整理+写入绑在一起)或产出标准不合理。需要拆分节点或调整 check。
+- abandon(放弃):executor 陷入循环(重复搜索同样的词),或产出文件完全不存在且没有写作迹象。继续也没用。
+
+new_max_turns:resume 时给出新的轮次上限(通常在原值基础上增加 50%~100%)。
+
+规则:
+- 用中文写理由,基于提供的事实判断,不要臆测
+- 优先考虑:executor 做了什么(产出文件状态),而非它说了什么(claim)
+- 如果产出文件在增长,倾向 resume
+- 如果产出文件不存在且 stream 显示在重复搜索,倾向 abandon
+- 如果产出文件存在但内容很少,且 stream 显示在搜索(不是在写),倾向 reframe(任务可能太重)`;
+
+export async function reviewMaxTurnsHit(
+  client: LlmClient,
+  node: CapabilityNode,
+  spec: GraphWorkflowSpec,
+  facts: ExecutionFacts,
+): Promise<MaxTurnsReview> {
+  const outputFactsStr = facts.outputFiles.map(f =>
+    `- ${f.path}: ${f.exists ? `存在,${f.bytes}字节,${f.lines}行,修改时间${f.modifiedAt}` : "不存在"}`
+  ).join("\n");
+
+  const behaviorStr = facts.streamLastNBehaviors.length > 0
+    ? facts.streamLastNBehaviors.map((b, i) => `  ${i + 1}. ${b}`).join("\n")
+    : "  (无行为记录)";
+
+  const userPrompt = [
+    `节点: ${node.id} (${node.kind})`,
+    `描述: ${node.desc}`,
+    "",
+    "节点产出要求:",
+    ...(node.outputs ?? []).map(o => `- ${o.path}: ${o.desc}`),
+    "",
+    "验收标准:",
+    ...(node.checks ?? []).map(c => `- [${c.method}] ${c.desc}`),
+    "",
+    "执行轨迹事实(机械收集):",
+    `已用轮次: ${facts.usedTurns}`,
+    `是否已 resume 过: ${facts.hasResumedBefore ? "是" : "否"}`,
+    "",
+    "产出文件状态:",
+    outputFactsStr,
+    "",
+    "stream 最后 N 轮行为:",
+    behaviorStr,
+    "",
+    `搜索关键词去重率: ${facts.searchKeywordsDedupRatio.toFixed(2)} (0=全重复,1=全不同)`,
+    "",
+    "请基于以上事实判断:继续给更多轮次是否有帮助?",
+  ].join("\n");
+
+  return client.completeJson<MaxTurnsReview>("composer", MAX_TURNS_REVIEW_SYSTEM, userPrompt);
 }

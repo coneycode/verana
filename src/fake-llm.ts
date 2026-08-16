@@ -101,6 +101,11 @@ export function buildSmartFakeClient(): FakeLlmClient {
       return { json: fakeComposerGraphSpec(user) };
     }
 
+    // Composer 复核 max-turns hit
+    if (role === "composer" && system.includes("max-turns")) {
+      return { json: { verdict: "abandon", reason: "测试:放弃 max-turns hit", reframe_action: null } };
+    }
+
     // Capability gap review(执行中能力缺口复核)
     if (role === "composer" && system.includes("workflow 规划者(Composer)。调度大脑报告了")) {
       return { json: { reasonable: false, reason: "测试:不需要新能力" } };

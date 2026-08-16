@@ -7,7 +7,7 @@ import { EventBus, projectEvent } from "./events.js";
 import { getProject, projectPath, saveProjectState, writeYaml } from "./project-store.js";
 import type {
   CapabilityNode, EventEntry, GraphRuntime, GraphWorkflowSpec,
-  SnapshotRecord, VerdictRecord,
+  SnapshotRecord, VerdictRecord, ExecutionFacts,
 } from "./types.js";
 import { renderBlackboardForContext, setBlackboardField } from "./blackboard.js";
 import { appendEvent, readEvents, writeSnapshot, readLatestSnapshot, nextSeq, buildProgressTruth } from "./event-log.js";
@@ -323,6 +323,44 @@ export async function runGraphProject(rootDir: string, projectId: string, client
     const runResult = execResult.content;
     const instruction = execResult.instruction;
 
+    // max-turns hit 检测:executor 因 max-turns 退出,不直接判 fail
+    const DEFAULT_MAX_TURNS = 120;
+    if (execResult.hitMaxTurns && execResult.sessionId) {
+      const hasResumedBefore = (wf as GraphRuntime & { resumed_runs?: Set<string> }).resumed_runs?.has(runId) ?? false;
+      const cumulativeMax = DEFAULT_MAX_TURNS * 2;
+
+      // 防呆:已 resume 过 或 到累计上限 → 不再 resume
+      if (hasResumedBefore || execResult.usedTurns >= cumulativeMax) {
+        bus?.publish(projectEvent("max_turns_review", projectId, { runId, nodeId: node.id, verdict: "abandon", reason: "已 resume 过或到累计上限" }));
+      } else {
+        // 机械收集执行轨迹事实
+        const facts = await collectExecutionFacts(rootDir, projectId, runId, node, execResult.usedTurns, hasResumedBefore);
+        bus?.publish(projectEvent("llm_status", projectId, { message: `max-turns hit,Composer 复核中...` }));
+
+        // Composer 复核
+        const { reviewMaxTurnsHit } = await import("./pipeline.js");
+        const review = await reviewMaxTurnsHit(client, node, spec, facts);
+        await appendEvent(solutionDir, { type: "max_turns_review", node: node.id, run_id: runId, data: { verdict: review.verdict, reason: review.reason, reframe_action: review.reframe_action ?? null, new_max_turns: review.new_max_turns ?? null } });
+        bus?.publish(projectEvent("max_turns_review", projectId, { runId, nodeId: node.id, verdict: review.verdict, reason: review.reason }));
+
+        if (review.verdict === "resume" && review.new_max_turns) {
+          // 续接执行:hermes --resume <session_id>
+          bus?.publish(projectEvent("llm_status", projectId, { message: `Composer 判定 resume,续接执行(新上限 ${review.new_max_turns})...` }));
+          const resumeResult = await resumeExecution(rootDir, projectId, runId, node, spec, execResult.sessionId, review.new_max_turns, bus, decision.instance);
+          // 标记已 resume
+          if (!(wf as GraphRuntime & { resumed_runs?: Set<string> }).resumed_runs) {
+            (wf as GraphRuntime & { resumed_runs?: Set<string> }).resumed_runs = new Set();
+          }
+          (wf as GraphRuntime & { resumed_runs?: Set<string> }).resumed_runs!.add(runId);
+          // resume 后更新 content
+          if (resumeResult.content) {
+            await appendFile(join(dir, "runs", runId, "stream.md"), `\n## Resume 续接输出\n\n${resumeResult.content}\n`, "utf8");
+          }
+        }
+        // reframe / abandon → 不做特殊处理,继续正常流程(verifier 会判 fail → diagnostician → scheduler 路由)
+      }
+    }
+
     // 验证
     let verdict: VerdictRecord;
     let artifactBody = runResult;
@@ -401,7 +439,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
   }
 }
 
-async function executeNode(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, bb: Record<string, unknown>, client: LlmClient, bus: EventBus | undefined, instance?: string, contextFieldsOverride?: string[]): Promise<{ content: string; instruction: string }> {
+async function executeNode(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, bb: Record<string, unknown>, client: LlmClient, bus: EventBus | undefined, instance?: string, contextFieldsOverride?: string[]): Promise<{ content: string; instruction: string; sessionId?: string; exitCode: number; hitMaxTurns: boolean; usedTurns: number }> {
   const dir = projectPath(rootDir, projectId);
   const solutionDir = join(dir, "solution");
   const runDir = join(dir, "runs", runId);
@@ -491,6 +529,9 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
   ].filter(p => p !== "");
 
   let content: string;
+  let agentSessionId: string | undefined;
+  let agentExitCode = 0;
+  let agentHitMaxTurns = false;
   if (node.kind === "agent") {
     // 重节点:走 ExecutorAdapter(hermes CLI),让 agent 框架用自己的工具(web/browser/...)完成
     bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: "调用 Hermes agent 执行(带 web 工具)..." }));
@@ -508,10 +549,13 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
       },
     });
     content = agentRun.claim || agentRun.raw;
-    if (!content) throw new Error(`Hermes agent returned empty (exit ${agentRun.exitCode})`);
+    agentSessionId = agentRun.sessionId;
+    agentExitCode = agentRun.exitCode;
+    agentHitMaxTurns = agentRun.hitMaxTurns ?? false;
+    if (!content && !agentHitMaxTurns) throw new Error(`Hermes agent returned empty (exit ${agentRun.exitCode})`);
     await appendFile(streamPath, `\n## Hermes Agent 输出\n\n${content}\n`, "utf8");
     // 诊断日志:完整 raw 存单独文件,stream.md 只存摘要
-    await appendFile(streamPath, `\n## 诊断\n\nexit_code: ${agentRun.exitCode}\nsession_id: ${agentRun.sessionId ?? "(none)"}\nclaim_len: ${agentRun.claim.length}\nraw_len: ${agentRun.raw.length}\nraw_file: runs/${runId}/raw-stdout.txt\n`, "utf8");
+    await appendFile(streamPath, `\n## 诊断\n\nexit_code: ${agentRun.exitCode}\nsession_id: ${agentRun.sessionId ?? "(none)"}\nhit_max_turns: ${agentHitMaxTurns}\nclaim_len: ${agentRun.claim.length}\nraw_len: ${agentRun.raw.length}\nraw_file: runs/${runId}/raw-stdout.txt\n`, "utf8");
     await writeFile(join(runDir, "raw-stdout.txt"), agentRun.raw, "utf8");
     // 把 agent 产出作为一整段推到前端(hermes -Q 只输出最终结果,不是逐字流)
     bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", delta: content }));
@@ -529,7 +573,14 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
   // claim 留痕(原始产出,带对话外壳,供归因用)
   await writeFile(join(runDir, "claim.md"), `# Claim\n\nNode ${node.id} (${node.kind}).\n\n${content}`, "utf8");
 
-  return { content, instruction: promptParts.join("\n") };
+  return {
+    content,
+    instruction: promptParts.join("\n"),
+    sessionId: agentSessionId,
+    exitCode: agentExitCode,
+    hitMaxTurns: agentHitMaxTurns,
+    usedTurns: agentMaxTurns,  // TODO: 从 hermes 输出提取实际轮次
+  };
 }
 
 /** 轻节点交叉验证:生成模型出结果 → evaluator 独立判一次 → 不一致(fail)走归因 */
@@ -689,4 +740,95 @@ export async function applyHumanVerdict(rootDir: string, projectId: string, verd
     }
   }
   await saveProjectState(rootDir, state);
+}
+
+// ===== max-turns 动态调整:执行轨迹收集 + resume =====
+
+/** 机械收集执行轨迹事实(不调 LLM) */
+async function collectExecutionFacts(rootDir: string, projectId: string, runId: string, node: CapabilityNode, usedTurns: number, hasResumedBefore: boolean): Promise<ExecutionFacts> {
+  const dir = projectPath(rootDir, projectId);
+  const runDir = join(dir, "runs", runId);
+
+  // 1. 产出文件状态
+  const outputFiles = await Promise.all((node.outputs ?? []).map(async (output) => {
+    const outPath = output.path.replace(/{instance}/g, node.instances?.[0]?.name ?? "");
+    const fullPath = join(dir, outPath);
+    try {
+      const stat = await import("node:fs/promises").then(m => m.stat(fullPath));
+      const content = await import("node:fs/promises").then(m => m.readFile(fullPath, "utf8"));
+      return {
+        path: outPath,
+        exists: true,
+        bytes: stat.size,
+        lines: content.split("\n").length,
+        modifiedAt: stat.mtime.toISOString(),
+      };
+    } catch {
+      return { path: outPath, exists: false, bytes: 0, lines: 0, modifiedAt: null };
+    }
+  }));
+
+  // 2. stream 最后 N 轮行为 + 搜索关键词去重率
+  const rawPath = join(runDir, "raw-stdout.txt");
+  let rawContent = "";
+  try {
+    rawContent = await import("node:fs/promises").then(m => m.readFile(rawPath, "utf8"));
+  } catch {}
+
+  // 提取工具调用行(┊ 开头),取最后 20 条
+  const toolLines = rawContent.split("\n").filter(l => l.includes("┊") && (l.includes("web_search") || l.includes("browser_navigate") || l.includes("write_file") || l.includes("read_file") || l.includes("curl"))).slice(-20);
+  const streamLastNBehaviors = toolLines.map(l => {
+    if (l.includes("web_search")) return "搜索";
+    if (l.includes("browser_navigate")) return "浏览网页";
+    if (l.includes("write_file")) return "写文件";
+    if (l.includes("read_file")) return "读文件";
+    if (l.includes("curl")) return "curl请求";
+    return "其他";
+  });
+
+  // 搜索关键词去重率
+  const searchKeywords = rawContent.match(/web_search.*?["\u201c]([^"\u201d]+)["\u201d]/g)?.map(m => m.slice(-20)) ?? [];
+  const uniqueKeywords = new Set(searchKeywords);
+  const searchKeywordsDedupRatio = searchKeywords.length > 0
+    ? uniqueKeywords.size / searchKeywords.length
+    : 0;
+
+  return {
+    outputFiles,
+    streamLastNBehaviors,
+    searchKeywordsDedupRatio,
+    usedTurns,
+    hasResumedBefore,
+  };
+}
+
+/** 续接执行:用 hermes --resume <session_id> */
+async function resumeExecution(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, sessionId: string, newMaxTurns: number, bus: EventBus | undefined, instance?: string): Promise<{ content: string }> {
+  const dir = projectPath(rootDir, projectId);
+  const runDir = join(dir, "runs", runId);
+  const streamPath = join(runDir, "stream.md");
+
+  bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: `Resume 续接执行(session ${sessionId.slice(0, 12)}..., 新上限 ${newMaxTurns})...` }));
+
+  const { HermesAdapter } = await import("./executors.js");
+  const adapter = injectedExecutor ?? new HermesAdapter();
+  const isFake = adapter.name !== "hermes";
+
+  // 如果 adapter 有 resume 方法,用 resume;否则 fallback 到 execute
+  if (adapter.resume && !isFake) {
+    const agentRun = await adapter.resume(sessionId, dir, {
+      maxTurns: newMaxTurns,
+      toolsets: ["web", "browser", "terminal", "file"],
+      timeoutMs: 600_000,
+      onOutputLine: (line) => {
+        if (line.trim()) bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", delta: line + "\n" }));
+      },
+    });
+    const content = agentRun.claim || agentRun.raw;
+    await writeFile(join(runDir, "raw-stdout.txt"), agentRun.raw, "utf8");
+    return { content };
+  }
+
+  // Fake executor 或无 resume:返回空(fake executor 不支持 resume)
+  return { content: "" };
 }

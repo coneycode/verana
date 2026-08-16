@@ -141,7 +141,7 @@ export interface EventEntry {
     | "scheduler_decision" | "capability_added" | "run_created"
     | "artifact_collected" | "artifact_validated" | "artifact_failed"
     | "artifact_materialized" | "artifact_materialization_failed"
-    | "llm_stream" | "diagnosis";
+    | "llm_stream" | "diagnosis" | "max_turns_review";
   node?: string;
   run_id?: string;
   reason?: string;          // 调度理由/护栏原因/人审原因
@@ -220,4 +220,38 @@ export interface ClarifierRecord {
 export interface ProjectState {
   project: ProjectRecord;
   status: StatusRecord;
+}
+
+// ===== max-turns 动态调整 =====
+
+/** 机械收集的执行轨迹事实(喂给 Composer 复核) */
+export interface ExecutionFacts {
+  outputFiles: Array<{
+    path: string;
+    exists: boolean;
+    bytes: number;
+    lines: number;
+    modifiedAt: string | null;
+  }>;
+  streamLastNBehaviors: string[];  // 最后 N 轮的工具调用类型摘要
+  searchKeywordsDedupRatio: number;  // 最后 N 轮搜索关键词去重率(0=全重复,1=全不同)
+  usedTurns: number;
+  hasResumedBefore: boolean;
+}
+
+/** Composer 对 max-turns hit 的复核结果 */
+export interface MaxTurnsReview {
+  verdict: "resume" | "reframe" | "abandon";
+  reason: string;
+  reframe_action?: "split_node" | "adjust_check" | null;
+  new_max_turns?: number;  // resume 时的新上限
+}
+
+/** executor 执行结果(含 session_id 供 resume 用) */
+export interface ExecutorResult {
+  content: string;
+  instruction: string;
+  sessionId?: string;
+  exitCode: number;
+  hitMaxTurns: boolean;  // executor 是否因 max-turns 退出
 }
