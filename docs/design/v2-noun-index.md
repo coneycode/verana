@@ -288,16 +288,12 @@ Scheduler(看进度真相+blackboard) → 选节点
 
 ### 5.1 节点拆细 + 精准重试
 
-方向:
-- Composer 按"功能"拆节点(不按产出物)
-- 一个功能 = 一个节点 = 可被多次调度
-- 例:collect_evidence(一个功能)被 scheduler 调6次,每次收集一个方案
-- executor 看 blackboard 判断"这次做哪个没做的"
-
-待解决:
-- blackboard 里需要进度追踪结构(框架级固定 key,value 填业务值)
-- Composer 输出 instance 清单(什么算一个 instance)
-- executor 怎么知道"这次做哪个"(看 blackboard 已完成列表)
+[LOCKED 2026-08-14] 已落地:Composer 按任务类型生成节点链。research 型用
+plan_outline → research(×N instances) → synthesize → polish → review 链路。
+- research 节点只搜索+记录(不整理),synthesize 综合成报告
+- 开放式搜索和确定性写作分离到不同节点
+- 节点间通过 blackboard + 声明 outputs 解耦
+- instances 拆分长任务,精准重试只重跑失败实例
 
 ### 5.2 迭代提升输出质量
 

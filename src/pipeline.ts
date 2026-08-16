@@ -59,11 +59,21 @@ const COMPOSER_SYSTEM_BASE = `你是一个 workflow 规划者(Composer)。你的
 
 规则:
 - 能力清单要覆盖目标的完整交付链,参考下方"本次任务类型"给出的能力链骨架
-- 报告写作链路:产出 deliverable 的节点必须配套大纲规划和润色修订:
-  - 大纲规划(light 节点):在写作节点之前,根据 evidence_index 或目标要求生成报告大纲(章节列表+每章要点),写入 blackboard 的 report_outline 字段。不搜索、不产出文件,只做结构规划
-  - 写作节点(agent):按大纲写完整初稿。context_inputs 包含 report_outline。产出 role=deliverable
-  - 润色修订(agent):在写作节点之后,读初稿做语言/逻辑/格式优化,产出最终报告。context_inputs 包含 report_outline
+- 节点拆分原则(任务单一化,节点间解耦):
+  - 每个节点只做一件事:搜索 OR 整理 OR 写作 OR 审校,不要绑在一起
+  - 开放式搜索(不可预测何时搜够)和确定性写作(有明确输入和产出)分离到不同节点
+  - 节点间通过 blackboard 和声明 outputs 解耦:上游产出文件+更新 blackboard,下游读 blackboard 获取上下文
+  - 中间产物(evidence/research 结果)不要求最终交付物质量,最终质量由 synthesize/write + review 保证
+- 报告写作链路(research 型):
+  - plan_outline(light,大纲规划):根据目标生成报告大纲(章节+每章要点+每个维度的调研方向),写入 blackboard 的 report_outline。不搜索、不产出文件,只做结构规划
+  - research(agent,×N instances):按大纲的调研方向,搜该维度信息,原始结果写入文件。产出 role=evidence。不要求整理成结构化报告——只搜+记录+标注来源
+  - synthesize(agent):从所有维度 research 结果综合写成完整报告初稿。搜到的用真实来源,搜不到的用 LLM 知识标注为趋势推演。产出 role=deliverable。context_inputs 包含 report_outline + research 结果索引
+  - polish_report(agent):读初稿做语言/逻辑/格式优化,产出最终报告。context_inputs 包含 report_outline
+  - review_report(agent):审校最终报告是否满足全部验收标准
   - 缺大纲规划或润色修订,校验不通过打回重生成
+- 报告写作链路(creative 型):
+  - plan_outline(light) → write_report(agent) → polish_report(agent) → review_report(agent)
+  - 不需要 research/ synthesize,直接规划大纲后写
 - 轻节点(light):判断/转换/更新记忆,单次调用;重节点(agent):创作/调研/分析,自主完成一件事
 - 每个节点必须有 checks(无验收不执行)
 - bounded 的 blackboard 字段必须有节点负责 updates
@@ -91,8 +101,8 @@ interface TaskTemplate {
 
 const TASK_TEMPLATES: Record<string, TaskTemplate> = {
   research: {
-    chain: "collect_evidence(×N instances, 按维度/方案拆分) → plan_outline(light) → write_report(agent) → polish_report(agent) → review_report(agent)",
-    guidance: "调研型任务。需要先按维度收集证据,每个维度一个 instance,产出 evidence 文件。报告基于证据撰写。有 instances 的 output path 必须含 {instance} 占位符。",
+    chain: "plan_outline(light) → research(×N instances, 按维度拆分) → synthesize(agent) → polish_report(agent) → review_report(agent)",
+    guidance: "调研型任务。先规划大纲(含每个维度的调研方向),再按维度收集证据。research 节点只负责按方向搜索+记录原始结果(带来源),不要求整理成结构化报告——那是 synthesize 的事。synthesize 从所有维度 research 结果综合成完整报告,搜到的用真实来源,搜不到的用 LLM 知识标注为趋势推演。有 instances 的 output path 必须含 {instance} 占位符。",
   },
   creative: {
     chain: "plan_outline(light) → write_report(agent) → polish_report(agent) → review_report(agent)",
