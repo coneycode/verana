@@ -323,9 +323,9 @@ export async function runGraphProject(rootDir: string, projectId: string, client
     const runResult = execResult.content;
     const instruction = execResult.instruction;
 
-    // max-turns hit 检测:executor 因 max-turns 退出,不直接判 fail
+    // max-turns hit 检测:executor 因 max-turns 或 timeout 退出,不直接判 fail
     const DEFAULT_MAX_TURNS = 120;
-    if (execResult.hitMaxTurns && execResult.sessionId) {
+    if (execResult.hitMaxTurns) {
       const hasResumedBefore = (wf as GraphRuntime & { resumed_runs?: Set<string> }).resumed_runs?.has(runId) ?? false;
       const cumulativeMax = DEFAULT_MAX_TURNS * 2;
 
@@ -343,8 +343,8 @@ export async function runGraphProject(rootDir: string, projectId: string, client
         await appendEvent(solutionDir, { type: "max_turns_review", node: node.id, run_id: runId, data: { verdict: review.verdict, reason: review.reason, reframe_action: review.reframe_action ?? null, new_max_turns: review.new_max_turns ?? null } });
         bus?.publish(projectEvent("max_turns_review", projectId, { runId, nodeId: node.id, verdict: review.verdict, reason: review.reason }));
 
-        if (review.verdict === "resume" && review.new_max_turns) {
-          // 续接执行:hermes --resume <session_id>
+        if (review.verdict === "resume" && review.new_max_turns && execResult.sessionId) {
+          // 续接执行:hermes --resume <session_id>(只有有 session_id 时才能 resume）
           bus?.publish(projectEvent("llm_status", projectId, { message: `Composer 判定 resume,续接执行(新上限 ${review.new_max_turns})...` }));
           const resumeResult = await resumeExecution(rootDir, projectId, runId, node, spec, execResult.sessionId, review.new_max_turns, bus, decision.instance);
           // 标记已 resume
@@ -356,6 +356,10 @@ export async function runGraphProject(rootDir: string, projectId: string, client
           if (resumeResult.content) {
             await appendFile(join(dir, "runs", runId, "stream.md"), `\n## Resume 续接输出\n\n${resumeResult.content}\n`, "utf8");
           }
+        } else if (review.verdict === "resume" && !execResult.sessionId) {
+          // Composer 判 resume 但没有 session_id(timeout kill 时 hermes 没输出 session_id)
+          // 降级为 abandon,走正常 fail 流程
+          bus?.publish(projectEvent("llm_status", projectId, { message: `无法 resume(无 session_id),走正常 fail 流程` }));
         }
         // reframe / abandon → 不做特殊处理,继续正常流程(verifier 会判 fail → diagnostician → scheduler 路由)
       }

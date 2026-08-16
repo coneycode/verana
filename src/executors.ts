@@ -131,8 +131,10 @@ export class HermesAdapter implements ExecutorAdapter {
       const scheduleTimeout = () => {
         clearTimeout(timer);
         timer = setTimeout(() => {
+          const elapsed = Math.round((timeoutMs - remainingTimeout) / 1000);
+          console.error(`[executor] timeout after ${elapsed}s (remaining ${Math.round(remainingTimeout / 1000)}s), killing PID ${child.pid}`);
           child.kill("SIGTERM");
-          try { child.kill("SIGKILL"); } catch {}
+          setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 100);
         }, remainingTimeout);
       };
       scheduleTimeout();
@@ -159,6 +161,7 @@ export class HermesAdapter implements ExecutorAdapter {
 
       child.on("close", (code) => {
         clearTimeout(timer);
+        console.error(`[executor] close: code=${code}, stdout=${stdout.length} bytes, pid=${child.pid}`);
         if (stdoutBuffer) { stdout += stdoutBuffer; onOutputLine?.(stdoutBuffer); }
         // 解析:第一行通常是 "session_id: xxx",其余是正文
         const lines = stdout.split("\n");
@@ -178,7 +181,8 @@ export class HermesAdapter implements ExecutorAdapter {
 
         // 检测 max-turns hit:hermes 输出里有 "max.*turn" 或 "turn.*limit" 或 "Max turns"
         const hitMaxTurns = /max.*turn|turn.*limit|Max turns|reached.*turn/i.test(stdout)
-          || stdout.includes("Messages:") && stdout.includes("tool calls");  // 退化检测:有消息和工具调用但没有 hermes 块
+          || stdout.includes("Messages:") && stdout.includes("tool calls")  // 退化检测:有消息和工具调用但没有 hermes 块
+          || code === null;  // 被 signal kill(timeout 或其他原因)——也视为未正常完成
 
         // 从 stdout 提取 hermes 的最终文字输出(╭─ ⚕ Hermes ─ 块)
         // 工具调用日志(┊ 开头)不进 claim,留在 raw/stdream 里
