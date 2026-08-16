@@ -334,7 +334,7 @@ export async function runGraphProject(rootDir: string, projectId: string, client
         bus?.publish(projectEvent("max_turns_review", projectId, { runId, nodeId: node.id, verdict: "abandon", reason: "已 resume 过或到累计上限" }));
       } else {
         // 机械收集执行轨迹事实
-        const facts = await collectExecutionFacts(rootDir, projectId, runId, node, execResult.usedTurns, hasResumedBefore);
+        const facts = await collectExecutionFacts(rootDir, projectId, runId, node, execResult.usedTurns, hasResumedBefore, decision.instance);
         bus?.publish(projectEvent("llm_status", projectId, { message: `max-turns hit,Composer 复核中...` }));
 
         // Composer 复核
@@ -749,13 +749,13 @@ export async function applyHumanVerdict(rootDir: string, projectId: string, verd
 // ===== max-turns 动态调整:执行轨迹收集 + resume =====
 
 /** 机械收集执行轨迹事实(不调 LLM) */
-async function collectExecutionFacts(rootDir: string, projectId: string, runId: string, node: CapabilityNode, usedTurns: number, hasResumedBefore: boolean): Promise<ExecutionFacts> {
+async function collectExecutionFacts(rootDir: string, projectId: string, runId: string, node: CapabilityNode, usedTurns: number, hasResumedBefore: boolean, instance?: string): Promise<ExecutionFacts> {
   const dir = projectPath(rootDir, projectId);
   const runDir = join(dir, "runs", runId);
 
   // 1. 产出文件状态
   const outputFiles = await Promise.all((node.outputs ?? []).map(async (output) => {
-    const outPath = output.path.replace(/{instance}/g, node.instances?.[0]?.name ?? "");
+    const outPath = output.path.replace(/{instance}/g, instance ?? node.instances?.[0]?.name ?? "");
     const fullPath = join(dir, outPath);
     try {
       const stat = await import("node:fs/promises").then(m => m.stat(fullPath));
