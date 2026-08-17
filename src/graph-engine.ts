@@ -94,8 +94,13 @@ export async function runGraphProject(rootDir: string, projectId: string, client
   for (const cap of spec.capabilities) {
     if (cap.instances && cap.instances.length > 0) {
       const remainingKey = `${cap.id}_remaining`;
-      if (!wf.blackboard[remainingKey] || !Array.isArray(wf.blackboard[remainingKey])) {
-        wf.blackboard[remainingKey] = cap.instances.map(i => i.name);
+      const existing = wf.blackboard[remainingKey];
+      const allNames = cap.instances.map(i => i.name);
+      const allNamesSet = new Set(allNames);
+      // 只有当 existing 包含且仅包含 allNames 里的所有 name 时才保留(防止残留脏数据/缺实例)
+      const isValid = Array.isArray(existing) && existing.length === allNames.length && existing.every(n => allNamesSet.has(n));
+      if (!isValid) {
+        wf.blackboard[remainingKey] = allNames;
       }
     }
   }
@@ -516,12 +521,27 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     (!instance && node.kind === "agent") ? "必须把正式交付物正文写入声明 output 路径；不要把执行过程、工具日志、claim、完成自述写进交付物。" : "",
     instance && node.kind === "agent" ? "产出文件只需聚焦本次实例维度的证据,不要按最终交付物结构(多章节)写,不要覆盖其他维度的内容。" : "",
     "",
-    node.kind === "agent" ? [
-      "执行约束:",
-      `- 总轮次上限${agentMaxTurns}次。产出文件是本节点的最终目的,搜索只是手段。确保在轮次用完前完成 write_file 写入产出文件。`,
-      "- 禁止反复解析同一个文件:一次打开,一次性提取所有需要的字段,不要每个关键词单独跑一遍。",
-      "- 每次工具调用要有明确目的,不要用试错式搜索(一个个词试)。",
-    ].join("\n") : "",
+    // 判断节点是否有 evidence 角色的 output(搜索类节点)
+    (() => {
+      const hasEvidenceOutput = (node.outputs ?? []).some(o => o.role === "evidence");
+      if (node.kind !== "agent") return "";
+      if (hasEvidenceOutput) {
+        return [
+          "执行约束:",
+          `- 总轮次上限${agentMaxTurns}次。`,
+          "- 边搜边写:搜到一条有价值的信息,立即用 write_file 追加写入产出文件。不要积累到最后再写——每搜到一条就写一条,文件始终保持有内容。",
+          "- 写入格式:每条信息标注来源(URL/出处),不需要结构化整理,原始记录即可。",
+          "- 禁止反复解析同一个文件:一次打开,一次性提取所有需要的字段,不要每个关键词单独跑一遍。",
+          "- 每次工具调用要有明确目的,不要用试错式搜索(一个个词试)。",
+        ].join("\n");
+      }
+      return [
+        "执行约束:",
+        `- 总轮次上限${agentMaxTurns}次。产出文件是本节点的最终目的,搜索只是手段。确保在轮次用完前完成 write_file 写入产出文件。`,
+        "- 禁止反复解析同一个文件:一次打开,一次性提取所有需要的字段,不要每个关键词单独跑一遍。",
+        "- 每次工具调用要有明确目的,不要用试错式搜索(一个个词试)。",
+      ].join("\n");
+    })(),
     softGuidance.length > 0 ? `方向引导(主观偏好,尽量遵循但不强制):\\n${softGuidance.map(s => `- ${s}`).join("\\n")}` : "",
     "",
     bbCtx,
