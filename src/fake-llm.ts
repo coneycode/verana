@@ -116,21 +116,19 @@ export function buildSmartFakeClient(): FakeLlmClient {
       schedCount++;
       // 检测进度真相里是否有 artifact fail
       if (user.includes("F_artifact_contract_failure") || user.includes("artifact_contract")) {
-        // 检查最近的 verdict 是否 passed(排除 passed=false)
         const recentLines = user.split("\n").slice(-4).join("\n");
         const recentPassed = /passed\b/.test(recentLines) && !/passed=false|passed: false/i.test(recentLines);
         if (!recentPassed) {
-          // 判断 failure codes 里有 missing/empty → retry,否则 materialize
           if (user.includes("declared_output_missing") || user.includes("declared_output_empty")) {
-            return { json: { next_node: "write_chapter", reason: "executor 没产出内容,重跑", capability_gap: "", is_complete: false, action: "retry_with_feedback" } };
+            return { json: { tasks: [{ next_node: "write_chapter", reason: "executor 没产出内容,重跑", action: "retry_with_feedback" }], is_complete: false, capability_gap: "" } };
           }
-          return { json: { next_node: "", reason: "artifact 形态不对,让 materializer 整理", capability_gap: "", is_complete: false, action: "materialize" } };
+          return { json: { tasks: [{ next_node: "write_chapter", reason: "artifact 形态不对,让 materializer 整理", action: "materialize" }], is_complete: false, capability_gap: "" } };
         }
       }
       if (schedCount <= 2) {
-        return { json: { next_node: "write_chapter", reason: "继续写下一章", capability_gap: "", is_complete: false, action: "execute" } };
+        return { json: { tasks: [{ next_node: "write_chapter", reason: "继续写下一章", action: "execute" }], is_complete: false, capability_gap: "" } };
       }
-      return { json: { next_node: "", reason: "已写到目标章数", capability_gap: "", is_complete: true, action: "execute" } };
+      return { json: { tasks: [], is_complete: true, capability_gap: "" } };
     }
 
     // 充分性检查器

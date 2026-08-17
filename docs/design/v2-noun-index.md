@@ -72,7 +72,7 @@
 | 名词 | 定义 |
 |------|------|
 | Diagnosis | diagnostician 的归因结果:六类根因(A-F)之一 + 说明 |
-| Scheduler Decision | scheduler 的决策输出:next_node + reason + action + is_complete |
+| Scheduler Decision | scheduler 的决策输出:tasks(任务列表,可含多个并行任务) + is_complete |
 | Root Cause Type | 六类:A=指令不具体 B=能力缺口 C=上下文错 D=标准不合理 E=目标问题 F=产物契约失败 |
 | Action | scheduler 路由动作:execute/retry_with_feedback/switch_node/request_capability/skip_node/materialize/human/resume |
 | Max-turns Review | Composer 对 max-turns hit 的复核:resume(续接)/reframe(拆分调整)/abandon(放弃) |
@@ -279,6 +279,7 @@ Scheduler(看进度真相+blackboard) → 选节点
 10. max-turns hit 不直接判 fail,交 Composer 复核(机械事实+LLM判断)
 11. resume 不从头开始,续接同一 executor 会话(hermes --resume)
 12. 同一 run 最多 resume 1 次,max-turns 累计上限 = 原值 × 2
+13. scheduler 输出任务列表,单任务串行/多任务并行(并行与否由 scheduler 判断)
 
 ---
 

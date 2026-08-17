@@ -5,7 +5,13 @@ import { renderBlackboardForContext } from "./blackboard.js";
 const SCHEDULER_SYSTEM = `你是一个调度大脑(scheduler)。你是调度决策的唯一出口。你的职责是基于当前进度真相(含归因结果),决定下一步做什么。
 
 你必须返回 JSON:
-{"next_node": "节点id(留空表示不执行节点)", "reason": "为什么这么决策", "capability_gap": "如果需要清单里没有的能力,描述需要什么(否则留空)", "is_complete": true/false, "action": "路由动作", "instance": "本次处理的实例名(仅对有remaining的节点)", "context_fields": ["blackboard字段名"]}
+{"tasks": [{"next_node": "节点id", "instance": "实例名(可选)", "action": "路由动作", "reason": "为什么", "context_fields": ["字段名(可选)"]}], "is_complete": true/false, "capability_gap": "需要的能力(否则留空)"}
+
+tasks 是任务列表:
+- 1 个任务 = 串行执行(默认)
+- 多个任务 = 并行执行(仅当任务之间互不依赖时才并行)
+- 判断能否并行的依据:看任务之间是否有依赖(一个任务的产出是另一个的输入)。互不依赖的可以并行,有依赖的必须串行。
+- 例:同一节点的多个 instance 通常互不依赖,可以并行。但一个节点的产出是另一个的输入,不能并行。
 
 instance 字段:
 - 对于 blackboard 里有 {node_id}_remaining 字段的节点:从 remaining 数组里选一个未完成的实例,输出 instance
@@ -44,14 +50,18 @@ context_fields 字段(通常不输出):
 - reason 必须具体,说明基于进度真相里的哪些事实(含根因)做的判断
 - 用中文`;
 
-export interface SchedulerDecision {
+export interface SchedulerTask {
   next_node: string;
   reason: string;
-  capability_gap: string;
-  is_complete: boolean;
   action?: "execute" | "retry_with_feedback" | "switch_node" | "request_capability" | "skip_node" | "human" | "materialize";
   instance?: string;  // scheduler 选择的实例(有 instances 的节点才输出,一次性节点不输出)
   context_fields?: string[];  // override: 这次注入给 executor 的 blackboard 字段;不输出=用节点默认 context_inputs
+}
+
+export interface SchedulerDecision {
+  tasks: SchedulerTask[];
+  is_complete: boolean;
+  capability_gap?: string;
 }
 
 export async function runScheduler(

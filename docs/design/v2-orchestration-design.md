@@ -235,7 +235,10 @@ blackboard 压缩维持在有界大小(滚动摘要:老内容压成粗概要,近
 ### 3.1 决策
 
 - 输入:**进度真相(带 verdict 的执行轨迹摘要)** + blackboard 内容摘要 + 能力清单 + 护栏
-- 输出:下一步调哪个节点 + **理由**(留痕、对人可见)
+- 输出:**任务列表(tasks)** — 每个任务含 next_node + instance + action + reason
+  - 单任务 = 串行执行(兼容原有行为)
+  - 多任务 = 并行执行(graph-engine 同时启动多个 executor)
+  - scheduler 判断哪些任务互不依赖可以并行(看节点 desc + blackboard 依赖)
 - **只能从能力清单选**(硬边界):不临时创造清单外的节点
 - 决策本身先不做交叉验证(太重,每步 double);靠护栏点人审 + 留痕兜底
   [注:同样是"先简单,跑出问题再收紧"]
@@ -670,15 +673,12 @@ loop:
   check_hard_guardrails()                      # 碰硬护栏 → 强制停
   maybe_human_checkpoint()                     # 阶段检查点 → 人审
   progress_truth = buildProgressTruth(events)  # 从 verdict/diagnosis 事件机械折叠,不读 claim
-  decision = scheduler(progress_truth, blackboard, 能力清单, 护栏)  # 唯一调度出口
-  append_event(decision)
-  switch decision.action:
-    human → 停,转人审
-    skip_node → 记录跳过,继续调度
-    request_capability → Composer 复核 → 新增节点继续 / 停问人
-    is_complete=true → workflow → final_review; break
-    execute/retry/switch → node = decision.next_node
-    resume → node = decision.next_node, 用 session_id 续接执行(见 4.5 节)
+  decisions = scheduler(progress_truth, blackboard, 能力清单, 护栏)  # 返回任务列表
+  append_event(decisions)
+  if decisions.is_complete → workflow → final_review; break
+  # 1 个任务 → 串行; 多个任务 → Promise.all 并行
+  for each task in decisions.tasks (并行):
+    task → execute(task.next_node, task.instance, blackboard)
   check_soft_guardrails(独立模型,node)          # 执行前软护栏 → 停,转人审
   run = execute(node, blackboard)              # 跑节点,产出 claim + 工作区文件变更
   if executor hit max-turns(未正常退出):        # max-turns hit → 不直接判 fail
