@@ -456,7 +456,8 @@ async function executeAndVerifyInstance(
   // max-turns hit 检测:executor 因 max-turns 或 timeout 退出,不直接判 fail
   const DEFAULT_MAX_TURNS = 120;
   if (execResult.hitMaxTurns) {
-    const hasResumedBefore = (wf as GraphRuntime & { resumed_runs?: Set<string> }).resumed_runs?.has(runId) ?? false;
+    const resumedRuns: string[] = Array.isArray((wf as GraphRuntime & { resumed_runs?: string[] }).resumed_runs) ? (wf as GraphRuntime & { resumed_runs?: string[] }).resumed_runs! : [];
+    const hasResumedBefore = resumedRuns.includes(runId);
     const cumulativeMax = DEFAULT_MAX_TURNS * 2;
 
     // 防呆:已 resume 过 或 到累计上限 → 不再 resume
@@ -478,10 +479,10 @@ async function executeAndVerifyInstance(
         bus?.publish(projectEvent("llm_status", projectId, { message: `Composer 判定 resume,续接执行(新上限 ${review.new_max_turns})...` }));
         const resumeResult = await resumeExecution(rootDir, projectId, runId, node, spec, execResult.sessionId, review.new_max_turns, bus, instance);
         // 标记已 resume
-        if (!(wf as GraphRuntime & { resumed_runs?: Set<string> }).resumed_runs) {
-          (wf as GraphRuntime & { resumed_runs?: Set<string> }).resumed_runs = new Set();
+        if (!Array.isArray((wf as GraphRuntime & { resumed_runs?: string[] }).resumed_runs)) {
+          (wf as GraphRuntime & { resumed_runs?: string[] }).resumed_runs = [];
         }
-        (wf as GraphRuntime & { resumed_runs?: Set<string> }).resumed_runs!.add(runId);
+        (wf as GraphRuntime & { resumed_runs?: string[] }).resumed_runs!.push(runId);
         // resume 后更新 content
         if (resumeResult.content) {
           await appendFile(join(dir, "runs", runId, "stream.md"), `\n## Resume 续接输出\n\n${resumeResult.content}\n`, "utf8");
