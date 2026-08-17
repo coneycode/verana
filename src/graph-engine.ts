@@ -341,13 +341,15 @@ export async function runGraphProject(rootDir: string, projectId: string, client
       await appendEvent(solutionDir, { type: "node_selected", node: node.id, reason: task.reason, instance: task.instance });
     }
 
-    // 先串行获取所有 runId(避免 nextRunId 冲突)
+    // 先串行获取所有 runId(避免 nextRunId 冲突)— 获取后立即创建目录防止重复
     const runIds: string[] = [];
     for (let i = 0; i < execTasks.length; i++) {
       const task = execTasks[i];
       const node = taskNodes[i];
       const rid = await nextRunId(rootDir, projectId);
       runIds.push(rid);
+      // 立即创建 runDir,防止下一个 nextRunId 返回相同 ID
+      await mkdir(join(projectPath(rootDir, projectId), "runs", rid), { recursive: true });
       wf.runs[node.id] = [...(wf.runs[node.id] ?? []), rid];
       await appendEvent(solutionDir, { type: "run_created", node: node.id, run_id: rid, instance: task.instance });
       bus?.publish(projectEvent("node_selected", projectId, { node: node.id, runId: rid, reason: task.reason, status: "running", instance: task.instance }));
