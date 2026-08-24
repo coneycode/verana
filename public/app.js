@@ -3,6 +3,7 @@ let selectedId = null;
 let state = null;
 let source = null;
 let busy = false;
+let busyTimer = null;
 let workflowSpec = null;
 let activeRunId = null;
 
@@ -480,8 +481,8 @@ function renderMain() {
 
     // 首次进入：如果没有 messages 且没有 conclusions 且没有 pending 请求，自动触发第一个问题
     if (messages.length === 0 && !conclusions && !isConfirmed && !busy) {
-      busy = true;
-      post('/projects/' + selectedId + '/clarify-chat', {}).then(() => { busy = false; refresh(); }).catch(e => { busy = false; console.error('clarify-chat failed:', e.message); });
+      setBusy(true);
+      post('/projects/' + selectedId + '/clarify-chat', {}).then(() => { setBusy(false); refresh(); }).catch(e => { setBusy(false); console.error('clarify-chat failed:', e.message); });
     }
     return;
   }
@@ -1118,14 +1119,18 @@ async function loadDeliverables() {
 async function maybeAutoStartClarify() {
   if (!state) return;
   const phase = getPhase();
-  if (phase === 'created' && !busy) {
+  if (phase === 'created') {
     const msgCount = state.status.clarifier?.messages?.length ?? 0;
-    if (msgCount === 0) {
-      busy = true;
+    if (msgCount === 0 && !busy) {
+      // 自恢复:created 状态且无消息,强制触发澄清(即使 busy 卡住也尝试)
+      setBusy(true);
       try { await sseClarifyChat(); }
-      catch(e) { /* ignore */ }
-      finally { busy = false; }
+      catch(e) { console.error('auto clarify failed:', e.message); }
+      finally { setBusy(false); }
       await refresh();
+    } else if (msgCount === 0 && busy) {
+      // busy 卡住了,5 秒后重试
+      setTimeout(() => { if (getPhase() === 'created' && (state?.status?.clarifier?.messages?.length ?? 0) === 0) maybeAutoStartClarify(); }, 5000);
     }
   }
 }
@@ -1360,6 +1365,13 @@ async function doDelete(projectId) {
 function setBusy(b) {
   busy = b;
   document.querySelectorAll('button').forEach(btn => btn.disabled = b);
+  // 超时保护:30 秒后自动清除 busy,防止请求卡住或页面异常导致永久阻塞
+  if (busyTimer) { clearTimeout(busyTimer); busyTimer = null; }
+  if (b) {
+    busyTimer = setTimeout(() => {
+      if (busy) { busy = false; document.querySelectorAll('button').forEach(btn => btn.disabled = false); console.warn('busy 超时自动清除'); }
+    }, 30000);
+  }
 }
 
 function connectEvents() {
