@@ -311,7 +311,7 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
     } catch { /* solution dir not found */ }
     // Merge all deliverables into one markdown
     const merged = files.map(f => `# ${f.path}\n\n${f.content}`).join("\n\n---\n\n");
-    const filename = `${request.params.id}-deliverables.md`;
+    const filename = `${encodeURIComponent(request.params.id)}-deliverables.md`;
     reply.header("content-type", "text/markdown; charset=utf-8");
     reply.header("content-disposition", `attachment; filename="${filename}"`);
     return merged;
