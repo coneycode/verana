@@ -65,7 +65,7 @@ const COMPOSER_SYSTEM_BASE = `你是一个 workflow 规划者(Composer)。你的
   - 开放式搜索(不可预测何时搜够)和确定性整理(有明确输入和产出)分离到不同节点
   - 节点间通过 blackboard 和声明 outputs 解耦:上游产出文件+更新 blackboard,下游读 blackboard 获取上下文
   - 中间产物(search 原始结果/evidence 整理结果)不要求最终交付物质量,最终质量由 synthesize/write + review 保证
-- 是否需要搜索的判断:不看 deliverable_type,看任务本身。如果任务涉及某个领域需要了解已有实践/论文/竞品/行业标准,就需要 search。如果纯靠 LLM 知识能写好,不需要 search
+- 是否需要搜索的判断:不看 deliverable_type,看任务本身。如果任务涉及一个专业领域(有论文/行业标准/行业实践),就加 search+write_evidence 阶段。宁可多搜索不要少搜索——搜索到的信息比 LLM 记忆里的更准确、更新。只有纯创作类任务(写小说/写诗)不需要搜索
 - 报告写作链路(需要搜索的,research 型或 creative 型含搜索):
   - plan_outline(light,大纲规划):根据目标生成报告大纲(章节+每章要点+每个维度的调研方向),写入 blackboard 的 report_outline。不搜索、不产出文件,只做结构规划
   - search(agent,×N instances):按大纲的调研方向搜该维度信息,边搜边把原始结果追加写入文件。产出 role=evidence,路径 solution/search/{instance}.md。不要求结构化、不要求整理——搜到一条写一条,每条标注来源。文件始终存在(不会 declared_output_missing)。check 只要求"有搜索结果+有来源",不要求"深入"或"完整"
