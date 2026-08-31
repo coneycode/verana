@@ -317,15 +317,30 @@ function renderViewMode(el, mode) {
   html += '<div class="row" style="margin:8px 0"><button class="secondary" id="rerunFromBtn">从此阶段重跑</button> <button class="bad" id="returnCurrentBtn">返回当前</button></div>';
 
   if (mode === 'created' || mode === 'clarifying') {
-    const entries = state.status.clarifier?.clarifications ?? [];
+    const messages = state.status.clarifier?.messages ?? [];
+    const conclusions = state.status.clarifier?.conclusions ?? [];
     const goal = state.project?.goal || '';
     html += '<div class="guide-desc">目标: '+escapeHtml(goal)+'</div>';
-    if (entries.length > 0) {
-      html += '<div class="section-title" style="margin-top:8px">已澄清记录</div>';
-      for (const e of entries) {
-        html += '<div class="qa-item"><div class="qa-q">Q: '+escapeHtml(e.q)+'</div><div class="qa-a">A: '+escapeHtml(e.a)+'</div></div>';
+    // 对话原文
+    if (messages.length > 0) {
+      html += '<div class="section-title" style="margin-top:8px">澄清对话</div>';
+      for (const m of messages) {
+        const isAssistant = m.role === 'assistant';
+        const avatar = isAssistant ? '🤖' : '🧑';
+        const name = isAssistant ? '系统' : '你';
+        html += '<div class="chat-msg ' + m.role + '" style="margin-bottom:8px"><div class="chat-avatar">' + avatar + '</div><div class="chat-content"><div class="chat-name">' + name + '</div><div class="chat-bubble">' + escapeHtml(m.content) + '</div></div></div>';
       }
-    } else { html += '<div class="muted">无澄清记录</div>'; }
+    }
+    // 结论
+    if (conclusions.length > 0) {
+      html += '<div class="section-title" style="margin-top:12px">澄清结论</div>';
+      for (const c of conclusions) {
+        html += '<div class="qa-item"><div class="qa-q">[' + escapeHtml(c.topic) + ']</div><div class="qa-a">' + escapeHtml(c.conclusion) + '</div></div>';
+      }
+    }
+    if (messages.length === 0 && conclusions.length === 0) {
+      html += '<div class="muted">无澄清记录</div>';
+    }
   } else if (mode === 'composing' || mode === 'plan_review') { // 合并:规划阶段
     // 展示 spec(能力清单+硬约束+软引导)
     if (workflowSpec) {
