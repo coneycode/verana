@@ -59,12 +59,14 @@ const COMPOSER_SYSTEM_BASE = `你是一个 workflow 规划者(Composer)。你的
 
 规则:
 - 能力清单要覆盖目标的完整交付链,参考下方"本次任务类型"给出的能力链骨架
+- 模板是参考骨架不是死规定:根据任务的具体要求调整节点结构。如果任务有多个独立维度(如多个场景/多个模块),应该按维度拆 instances
 - 节点拆分原则(任务单一化,节点间解耦):
   - 每个节点只做一件事:搜索 OR 整理 OR 写作 OR 审校,不要绑在一起
   - 开放式搜索(不可预测何时搜够)和确定性整理(有明确输入和产出)分离到不同节点
   - 节点间通过 blackboard 和声明 outputs 解耦:上游产出文件+更新 blackboard,下游读 blackboard 获取上下文
-  - 中间产物(search 原始结果/evidence 整理结果)不要求最终交付物质量,最终质量由 synthesize + review 保证
-- 报告写作链路(research 型):
+  - 中间产物(search 原始结果/evidence 整理结果)不要求最终交付物质量,最终质量由 synthesize/write + review 保证
+- 是否需要搜索的判断:不看 deliverable_type,看任务本身。如果任务涉及某个领域需要了解已有实践/论文/竞品/行业标准,就需要 search。如果纯靠 LLM 知识能写好,不需要 search
+- 报告写作链路(需要搜索的,research 型或 creative 型含搜索):
   - plan_outline(light,大纲规划):根据目标生成报告大纲(章节+每章要点+每个维度的调研方向),写入 blackboard 的 report_outline。不搜索、不产出文件,只做结构规划
   - search(agent,×N instances):按大纲的调研方向搜该维度信息,边搜边把原始结果追加写入文件。产出 role=evidence,路径 solution/search/{instance}.md。不要求结构化、不要求整理——搜到一条写一条,每条标注来源。文件始终存在(不会 declared_output_missing)。check 只要求"有搜索结果+有来源",不要求"深入"或"完整"
   - write_evidence(agent,×N instances):从 search 文件读取原始搜索结果,整理成结构化证据文件。产出 role=intermediate,路径 solution/evidence/{instance}.md。不需要搜索,只整理——有明确输入和产出。context_inputs 包含 report_outline
@@ -72,9 +74,10 @@ const COMPOSER_SYSTEM_BASE = `你是一个 workflow 规划者(Composer)。你的
   - polish_report(agent):读初稿做语言/逻辑/格式优化,产出最终报告。context_inputs 包含 report_outline
   - review_report(agent):审校最终报告是否满足全部验收标准
   - 缺大纲规划或润色修订,校验不通过打回重生成
-- 报告写作链路(creative 型):
+- 报告写作链路(不需要搜索的,creative 型):
   - plan_outline(light) → write_report(agent) → polish_report(agent) → review_report(agent)
-  - 不需要 research/ synthesize,直接规划大纲后写
+  - 不需要 search/write_evidence,直接规划大纲后写
+  - write_report 的 check 要覆盖用户提的所有要求(每个要求一条 check),不要一个大而全的 check
 - 轻节点(light):判断/转换/更新记忆,单次调用;重节点(agent):创作/调研/分析,自主完成一件事
 - 每个节点必须有 checks(无验收不执行)
 - bounded 的 blackboard 字段必须有节点负责 updates
@@ -106,8 +109,8 @@ const TASK_TEMPLATES: Record<string, TaskTemplate> = {
     guidance: "调研型任务。先规划大纲(含每个维度的调研方向)。search 节点边搜边写原始结果到 solution/search/{instance}.md(搜到一条写一条,每条标注来源,不要求结构化)。write_evidence 从 search 文件整理成 solution/evidence/{instance}.md(只整理不搜索)。synthesize 从所有 evidence 综合成完整报告。有 instances 的 output path 必须含 {instance} 占位符。search 和 write_evidence 的 instances 清单一致。",
   },
   creative: {
-    chain: "plan_outline(light) → write_report(agent) → polish_report(agent) → review_report(agent)",
-    guidance: "创作型任务(PRD/方案/设计文档)。不需要收集证据,直接规划大纲后写。大纲规划根据目标要求生成章节结构和要点,写入 report_outline。",
+    chain: "plan_outline(light) → [search(×N) → write_evidence(×N)](可选) → write_report(agent) → polish_report(agent) → review_report(agent)",
+    guidance: "创作型任务(PRD/方案/设计文档/教学文档)。如果任务需要参考已有实践/竞品/论文,加 search+write_evidence 阶段先调研再写。如果纯靠 LLM 知识能写,跳过搜索直接规划大纲后写。大纲规划根据目标要求生成章节结构和要点,写入 report_outline。",
   },
   implementation: {
     chain: "plan_tasks(light) → implement(×N instances, 按模块拆分) → test(agent) → review(agent)",
@@ -118,14 +121,16 @@ const TASK_TEMPLATES: Record<string, TaskTemplate> = {
 const CLASSIFIER_SYSTEM = `根据用户目标和澄清结论，判断任务类型。返回 JSON: {"task_type": "research | creative | implementation", "reason": "判断理由"}
 
 判断原则(看语义不看关键词):
-- research: 目标是让读者了解/理解/分析某个事物的现状(如"调研""对比""综述")
-- creative: 目标是产出一份文档/方案/设计/PRD，让读者参考或照着做(如"输出""撰写""设计"一个方案)。即使方案里描述了实现流程，产出本身是文档不是代码
-- implementation: 目标是实际构建/部署/运行一个系统，产出是真实可运行的代码/项目
+- research: 目标是了解/理解/分析某个事物的现状(如"调研""对比""综述")
+- creative: 目标是产出一份文档/方案/设计/PRD/教学文档,让读者参考或照着做。即使方案里描述了实现流程,产出本身是文档不是代码
+- implementation: 目标是实际构建/部署/运行一个系统,产出是真实可运行的代码/项目
 
 关键区分:
-- "描述实现流程" vs "要求实现代码"：前者是 creative(方案文档里写流程)，后者是 implementation(真要写代码)
-- "设计架构" vs "搭建架构"：前者 creative，后者 implementation
-- 看澄清结论里用户对最终产出的期望，不看单个词
+- "描述实现流程" vs "要求实现代码":前者是 creative(方案文档里写流程),后者是 implementation(真要写代码)
+- "设计架构" vs "搭建架构":前者 creative,后者 implementation
+- 看澄清结论里用户对最终产出的期望,不看单个词
+
+注意:task_type 只决定产出形式,不决定是否需要搜索。是否需要搜索由 Composer 在规划时根据任务本身判断——如果任务涉及某个领域需要了解已有实践/论文/竞品,就加 search+write_evidence 阶段。
 
 拿不准的归 creative。`;
 
