@@ -692,24 +692,14 @@ function renderPlanOverview(containerId) {
 function renderTimelineBlocks(containerId) {
   const el = $(containerId);
   if (!el) return;
-  // 先渲染澄清记录(可折叠,含对话原文+结论)
+  // 先渲染澄清记录(可折叠,只显示结论)
   const clarifier = state?.status?.clarifier;
   const conclusions = clarifier?.conclusions ?? [];
-  const chatMessages = clarifier?.messages ?? [];
   let clarifierHtml = '';
-  if (chatMessages.length > 0 || conclusions.length > 0) {
-    clarifierHtml = '<details style="margin-bottom:8px;border:1px solid var(--border);border-radius:6px;padding:6px 10px"><summary style="cursor:pointer;font-size:13px;color:var(--accent)">📋 澄清记录 (' + conclusions.length + '条结论, ' + chatMessages.length + '条对话)</summary><div style="margin-top:6px">';
-    // 对话原文
-    for (const m of chatMessages) {
-      const isAssistant = m.role === 'assistant';
-      clarifierHtml += '<div style="margin-bottom:6px;font-size:13px;border-left:2px solid ' + (isAssistant ? 'var(--accent)' : 'var(--text-muted)') + ';padding-left:8px"><span style="color:var(--text-muted);font-size:11px">' + (isAssistant ? '系统' : '你') + '</span><br><span style="color:var(--text)">' + escapeHtml(m.content) + '</span></div>';
-    }
-    // 结论
-    if (conclusions.length > 0) {
-      clarifierHtml += '<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px;font-size:12px;color:var(--text-muted)">结论</div>';
-      for (const c of conclusions) {
-        clarifierHtml += '<div style="margin-bottom:4px;font-size:13px"><span style="color:var(--accent-hover)">[' + escapeHtml(c.topic) + ']</span> <span style="color:var(--text)">' + escapeHtml(c.conclusion) + '</span></div>';
-      }
+  if (conclusions.length > 0) {
+    clarifierHtml = '<details style="margin-bottom:8px;border:1px solid var(--border);border-radius:6px;padding:6px 10px"><summary style="cursor:pointer;font-size:13px;color:var(--accent)">📋 澄清记录 (' + conclusions.length + '条)</summary><div style="margin-top:6px">';
+    for (const c of conclusions) {
+      clarifierHtml += '<div style="margin-bottom:4px;font-size:13px"><span style="color:var(--accent-hover)">[' + escapeHtml(c.topic) + ']</span> <span style="color:var(--text)">' + escapeHtml(c.conclusion) + '</span></div>';
     }
     clarifierHtml += '</div></details>';
   }
