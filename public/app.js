@@ -677,11 +677,22 @@ function renderPlanOverview(containerId) {
 function renderTimelineBlocks(containerId) {
   const el = $(containerId);
   if (!el) return;
+  // 先渲染澄清记录(可折叠)
+  const clarifier = state?.status?.clarifier;
+  const conclusions = clarifier?.conclusions ?? [];
+  let clarifierHtml = '';
+  if (conclusions.length > 0) {
+    clarifierHtml = '<details style="margin-bottom:8px;border:1px solid var(--border);border-radius:6px;padding:6px 10px"><summary style="cursor:pointer;font-size:13px;color:var(--accent)">📋 澄清记录 (' + conclusions.length + '条)</summary><div style="margin-top:6px">';
+    for (const c of conclusions) {
+      clarifierHtml += '<div style="margin-bottom:4px;font-size:13px"><span style="color:var(--accent-hover)">[' + escapeHtml(c.topic) + ']</span> <span style="color:var(--text)">' + escapeHtml(c.conclusion) + '</span></div>';
+    }
+    clarifierHtml += '</div></details>';
+  }
   if (timelineBlocks.length === 0) {
-    el.innerHTML = '<div class="muted" style="padding:12px">等待开始...</div>';
+    el.innerHTML = clarifierHtml + '<div class="muted" style="padding:12px">等待开始...</div>';
     return;
   }
-  let html = '';
+  let html = clarifierHtml;
   for (let i = 0; i < timelineBlocks.length; i++) {
     const b = timelineBlocks[i];
     const isRunning = b.status === 'running';
@@ -728,7 +739,8 @@ function renderTimelineBlocks(containerId) {
       }
       if (b.verdict) {
         const pass = b.verdict.passed;
-        html += '<div style="color:'+(pass?'var(--ok)':'var(--bad)')+';font-size:13px;margin-bottom:4px">'+(pass?'✅':'❌')+' 验证: '+(pass?'通过':'未通过')+(b.verdict.reasons?.length?' — '+escapeHtml(b.verdict.reasons[0].slice(0,80)):'')+'</div>';
+        const reasonsText = (b.verdict.reasons ?? []).join('; ');
+        html += '<div style="color:'+(pass?'var(--ok)':'var(--bad)')+';font-size:13px;margin-bottom:4px">'+(pass?'✅':'❌')+' 验证: '+(pass?'通过':'未通过')+(reasonsText?' — '+escapeHtml(reasonsText.slice(0,300)):'')+'</div>';
       }
       if (b.diagnosis) {
         html += '<div style="color:var(--accent-hover);font-size:13px;margin-bottom:4px">🔬 归因: '+escapeHtml(b.diagnosis.root_cause)+' — '+escapeHtml((b.diagnosis.explanation||'').slice(0,80))+'</div>';
