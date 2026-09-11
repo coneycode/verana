@@ -583,14 +583,33 @@ function renderMain() {
     const scene = wf?.awaiting_scene ?? 'checkpoint';
     const reason = wf?.awaiting_reason ?? '需要人审';
     const sceneLabels = { failure: '失败/异常', guardrail: '碰护栏', capability_gap: '能力缺口', checkpoint: '阶段检查点', anomaly: '状态异常' };
+
+    // 从 timelineBlocks 构建执行进度摘要
+    const passedNodes = timelineBlocks.filter(b => b.status === 'passed').map(b => b.nodeId);
+    const failedNodes = timelineBlocks.filter(b => b.status === 'failed').map(b => b.nodeId);
+    const runningNodes = timelineBlocks.filter(b => b.status === 'running').map(b => b.nodeId);
+    const totalNodes = (workflowSpec?.capabilities ?? []).length;
+    const iter = wf?.iteration ?? 0;
+
+    let progressHtml = '<div style="margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--surface-hover)">';
+    progressHtml += '<div style="font-size:13px;color:var(--text-muted);margin-bottom:4px">执行进度</div>';
+    progressHtml += '<div style="font-size:13px;color:var(--text)">✅ 已通过: ' + (passedNodes.length > 0 ? passedNodes.join(', ') : '无') + '</div>';
+    if (failedNodes.length > 0) progressHtml += '<div style="font-size:13px;color:var(--bad)">❌ 失败: ' + failedNodes.join(', ') + '</div>';
+    if (runningNodes.length > 0) progressHtml += '<div style="font-size:13px;color:var(--warn)">⟳ 进行中: ' + runningNodes.join(', ') + '</div>';
+    progressHtml += '<div style="font-size:13px;color:var(--text-muted);margin-top:4px">轮次: ' + iter + (wf?.node_retries && Object.keys(wf.node_retries).length > 0 ? ' · 重试: ' + Object.entries(wf.node_retries).map(([k,v]) => k+'×'+v).join(', ') : '') + '</div>';
+    progressHtml += '<div style="font-size:13px;color:var(--text-muted)">节点: ' + passedNodes.length + '/' + totalNodes + ' 已通过</div>';
+    progressHtml += '</div>';
+
     el.innerHTML = '<div class="guide"><div class="guide-title" style="color:var(--warn)">需要人审: '+escapeHtml(sceneLabels[scene] || scene)+'</div><div class="guide-desc">'+escapeHtml(reason)+'</div>'+
-      '<div class="row"><button class="good" id="humanContinueBtn">继续执行</button><button class="secondary" id="humanRetryBtn">重试 '+escapeHtml(nodeLabel(wf?.current_node)||'')+'</button><button class="bad" id="humanAbortBtn">放弃</button></div>'+
+      progressHtml +
+      '<div class="row" style="margin-top:8px"><button class="good" id="humanContinueBtn">继续执行</button><button class="secondary" id="humanRetryBtn">重试 '+escapeHtml(nodeLabel(wf?.current_node)||'')+'</button><button class="bad" id="humanAbortBtn">放弃</button></div>'+
       '<div style="margin-top:10px"><div class="muted" style="margin-bottom:4px">给调度大脑的方向指令(可选,持续影响后续调度):</div><textarea id="humanDirection" placeholder="例如:产出要纯净正文不要混入汇报文字,或者:第3章节奏太慢要加快"></textarea></div>'+
       '<div style="margin-top:8px"><div class="muted" style="margin-bottom:4px">手动编辑 blackboard(可选,JSON 格式):</div><textarea id="humanBbEdit" placeholder="例如: {&quot;summary&quot;:&quot;修改后的摘要&quot;}" style="min-height:50px"></textarea></div>'+
-      '</div><div id="lastRunPanel" style="margin-top:12px"></div><div id="blackboardPanel" style="margin-top:12px"></div>';
+      '</div><div id="lastRunPanel" style="margin-top:12px"></div><div id="timelineBox2" style="margin-top:12px"></div><div id="blackboardPanel" style="margin-top:12px"></div>';
     $('humanContinueBtn').onclick = () => doHumanVerdict('continue');
     $('humanRetryBtn').onclick = () => doHumanVerdict('retry');
     $('humanAbortBtn').onclick = () => doHumanVerdict('abort');
+    renderTimelineBlocks('timelineBox2');
     renderBlackboard('blackboardPanel');
     loadLastRunForHuman('lastRunPanel', wf?.current_node);
     return;
