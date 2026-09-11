@@ -204,6 +204,11 @@ export async function runGraphProject(rootDir: string, projectId: string, client
           await saveProjectState(rootDir, state);
           return;
         }
+        // light 节点没有 artifact 不能 materialize,不消耗 iteration,交回 scheduler
+        if (node.kind === "light") {
+          await appendEvent(solutionDir, { type: "node_done", node: nodeId, reason: `materialize 跳过(light 节点无 artifact)` });
+          continue;
+        }
         const lastRunId = wf.runs[nodeId]?.[wf.runs[nodeId].length - 1];
         if (!lastRunId) {
           wf.workflow_status = "awaiting_human";
