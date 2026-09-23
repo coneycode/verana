@@ -1171,7 +1171,15 @@ async function maybeAutoStartClarify() {
       // 自恢复:created 状态且无消息,强制触发澄清(即使 busy 卡住也尝试)
       setBusy(true);
       try { await sseClarifyChat(); }
-      catch(e) { console.error('auto clarify failed:', e.message); }
+      catch(e) {
+        console.error('auto clarify failed:', e.message);
+        // 在聊天区展示错误
+        const msgEl = $('chatMessages');
+        if (msgEl) {
+          msgEl.insertAdjacentHTML('beforeend', '<div class="chat-msg assistant"><div class="chat-avatar">🤖</div><div class="chat-content"><div class="chat-name">系统</div><div class="chat-bubble" style="color:var(--bad)">⚠️ 澄清启动失败: ' + escapeHtml(e.message) + '</div></div></div>');
+          msgEl.scrollTop = msgEl.scrollHeight;
+        }
+      }
       finally { setBusy(false); }
       await refresh();
     } else if (msgCount === 0 && busy) {
@@ -1237,8 +1245,16 @@ async function sseClarifyChat(answer) {
           bubbleEl.textContent = display;
           msgEl.scrollTop = msgEl.scrollHeight;
         }
+      } else if (data.type === 'error') {
+        // SSE 返回错误 — 在聊天区展示
+        const sb = $('streamingBubble'); if (sb) sb.remove();
+        const tb = $('thinkingBubble'); if (tb) tb.remove();
+        if (msgEl) {
+          msgEl.insertAdjacentHTML('beforeend', '<div class="chat-msg assistant"><div class="chat-avatar">🤖</div><div class="chat-content"><div class="chat-name">系统</div><div class="chat-bubble" style="color:var(--bad)">⚠️ ' + escapeHtml(data.message || '未知错误') + '</div></div></div>');
+          msgEl.scrollTop = msgEl.scrollHeight;
+        }
+        throw new Error(data.message || 'LLM 调用失败');
       } else {
-        // question 或 done — 移除流式气泡
         const sb = $('streamingBubble'); if (sb) sb.remove();
         const tb = $('thinkingBubble'); if (tb) tb.remove();
         return data;
