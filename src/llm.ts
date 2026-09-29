@@ -44,9 +44,10 @@ export async function loadConfig(cwd?: string): Promise<VeranaConfig> {
 export function normalizeConfig(raw: Partial<VeranaConfig>): VeranaConfig {
   const composer = normalizeRole(raw.composer, "composer");
   const evaluator = normalizeRole(raw.evaluator, "evaluator");
-  if (composer.model === evaluator.model && composer.base_url === evaluator.base_url) {
-    throw new Error("composer and evaluator must be different models (design doc section 8).");
-  }
+  // 临时允许相同模型(模型选项有限时)
+  // if (composer.model === evaluator.model && composer.base_url === evaluator.base_url) {
+  //   throw new Error("composer and evaluator must be different models (design doc section 8).");
+  // }
   return { composer, evaluator };
 }
 

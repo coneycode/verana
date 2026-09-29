@@ -26,12 +26,12 @@ test("parseJsonLoose extracts JSON from fenced LLM output", async () => {
   assert.equal(result.reasons[0], "ok");
 });
 
-test("normalizeConfig rejects same model for composer and evaluator", async () => {
+test("normalizeConfig allows same model for composer and evaluator (temporary)", async () => {
   const { normalizeConfig } = await import("../src/llm.js");
-  assert.throws(() =>
-    normalizeConfig({
-      composer: { role: "composer", base_url: "x", model: "same", api_key: "k" },
-      evaluator: { role: "evaluator", base_url: "x", model: "same", api_key: "k" },
-    }),
-  );
+  const cfg = normalizeConfig({
+    composer: { role: "composer", base_url: "x", model: "same", api_key: "k" },
+    evaluator: { role: "evaluator", base_url: "x", model: "same", api_key: "k" },
+  });
+  assert.equal(cfg.composer.model, "same");
+  assert.equal(cfg.evaluator.model, "same");
 });

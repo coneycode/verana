@@ -80,6 +80,7 @@ const COMPOSER_SYSTEM_BASE = `你是一个 workflow 规划者(Composer)。你的
   - write_report 的 check 要覆盖用户提的所有要求(每个要求一条 check),不要一个大而全的 check
 - 轻节点(light):判断/转换/更新记忆,单次调用;重节点(agent):创作/调研/分析,自主完成一件事
 - 每个节点必须有 checks(无验收不执行)
+- agent 节点必须有 outputs(artifact contract 要求,产出文件路径必须声明)
 - bounded 的 blackboard 字段必须有节点负责 updates
 - guardrails.hard.max_iterations 必须有(安全阀)
 - hard_constraints:从澄清信息中提取客观、可判定的约束(格式/数量/预算/合规/平台),这些将变成 checks 的种子
