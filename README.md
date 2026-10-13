@@ -56,6 +56,11 @@ v2 graph workflow implementation is active. Implemented and being refined:
 - Hermes executor path
 - Web/SSE control plane (unnamed event, onmessage dispatch)
 - Iteration promotion: instances + remaining + scheduler instance selection
+- Fault tolerance (2026-10 incident hardening): parallel-batch isolation (infra errors become
+  synthetic `F_infra_error` verdicts, never kill the batch), LLM network retry + 300s
+  AbortController safety valve, run failures persist to events.log + flip status (no more
+  silent "executing forever"), verdict.yaml written eagerly (crash leaves a trace), startup
+  recovery audits passed verdicts and restores blackboard deductions instead of re-running
 
 ---
 
@@ -389,12 +394,27 @@ composer:
   base_url: "http://your-gateway/anthropic"
   model: "ppio/pa/claude-opus-4-8"
   api_key: "sk-xxx"
+  # optional: per-response output token cap (thinking included). Default 16384.
+  # max_tokens: 16384
 
 evaluator:
   base_url: "http://your-gateway/anthropic"
   model: "pa/claude-sonnet-5"
   api_key: "sk-xxx"
+  # max_tokens: 16384
 ```
+
+`max_tokens` (optional, default `16384`) caps output tokens per response.
+Reasoning models emit a thinking block that counts against this budget, and the
+Composer must emit a complete JSON spec — with 8192 the JSON frequently got
+truncated mid-stream (`stop_reason=max_tokens`). Two defenses handle this
+model-agnostically (works for GPT/GLM/Kimi behind an Anthropic-compatible
+gateway):
+
+1. Raise the budget via `max_tokens` in config (per role).
+2. Truncation-aware retry: when `stop_reason=max_tokens` (or the JSON fails to
+   parse / content is empty), the plan loop catches it, and retries with a
+   targeted "compress your output" feedback instead of crashing the whole plan.
 
 LLM client uses Anthropic native Messages API (`/v1/messages`, `x-api-key`,
 `anthropic-version`). To switch to OpenAI-compatible API, replace
@@ -506,6 +526,10 @@ v2 图工作流实现进行中，已实现并打磨中:
 - Hermes executor 路径
 - Web/SSE 控制面(unnamed event, onmessage 统一分发)
 - 迭代提升: instances + remaining + scheduler 选实例
+- 容错(2026-10 事故加固): 并行批隔离(基础设施异常转 F_infra_error synthetic verdict,
+  不毁整批)、LLM 网络异常重试 + 300s AbortController 安全阀、run 失败落 events.log 并
+  翻转状态(不再"永远执行中")、verdict.yaml 前置落盘(崩溃留痕)、启动恢复先审计已
+  passed 的 verdict 补扣 blackboard 而非盲目重跑
 
 ---
 
@@ -819,12 +843,24 @@ composer:
   base_url: "http://your-gateway/anthropic"
   model: "ppio/pa/claude-opus-4-8"
   api_key: "sk-xxx"
+  # 可选:单次响应输出 token 上限(含 thinking)。默认 16384。
+  # max_tokens: 16384
 
 evaluator:
   base_url: "http://your-gateway/anthropic"
   model: "pa/claude-sonnet-5"
   api_key: "sk-xxx"
+  # max_tokens: 16384
 ```
+
+`max_tokens`(可选,默认 `16384`)限制单次响应的输出 token。推理型模型
+(经网关转发 GPT/GLM/Kimi 等)默认带 thinking 块,thinking 计入该预算,
+而 Composer 必须输出完整闭合的 JSON spec——8192 时 JSON 经常中途截断
+(`stop_reason=max_tokens`)。两层防御,模型无关:
+
+1. 在 config 里按 role 调高 `max_tokens`。
+2. 截断感知重试:检测到 `stop_reason=max_tokens`(或 JSON 解析失败/
+   内容为空)时,规划循环会捕获并带"精简输出"定向反馈重试,不会炸掉整个 plan。
 
 LLM client 使用 Anthropic 原生 Messages API(`/v1/messages`, `x-api-key`,
 `anthropic-version`)。切换到 OpenAI 兼容 API，替换 `llm.ts` 中的

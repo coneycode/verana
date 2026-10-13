@@ -362,11 +362,31 @@ export async function runGraphProject(rootDir: string, projectId: string, client
     await saveProjectState(rootDir, state);
 
     // 执行 + 验证所有任务
-    const doExecute = async (i: number) => {
+    // 批隔离:单个任务的基础设施异常(LLM 网络挂了/文件系统错)不毁整批 —
+    // 转成 synthetic verdict(failure_class: infra_error),收集循环只认 verdict(单一职责)。
+    // infra_error 跳过 diagnoseFailure(根因已知,不烧 LLM 调用去诊断一个 ETIMEDOUT)。
+    const doExecute = async (i: number): Promise<{ verdict: VerdictRecord; claim: string; artifactBody: string; instruction: string }> => {
       const task = execTasks[i];
       const node = taskNodes[i];
       const rid = runIds[i];
-      return executeAndVerifyInstance(rootDir, projectId, rid, node, spec, wf, client, bus, task.instance, task.context_fields, deliverableContract, solutionDir);
+      try {
+        return await executeAndVerifyInstance(rootDir, projectId, rid, node, spec, wf, client, bus, task.instance, task.context_fields, deliverableContract, solutionDir);
+      } catch (err) {
+        const errMsg = (err as Error)?.message ?? String(err);
+        console.error(`[graph] run ${rid} (node ${node.id}) infra error: ${errMsg}`);
+        await appendEvent(solutionDir, { type: "run_infra_error", node: node.id, run_id: rid, reason: `基础设施异常,不计入执行质量: ${errMsg.slice(0, 300)}`, data: { error: errMsg.slice(0, 1000) } });
+        bus?.publish(projectEvent("run_infra_error", projectId, { node: node.id, runId: rid, error: errMsg.slice(0, 300) }));
+        const infraVerdict: VerdictRecord = {
+          passed: false,
+          method: "combined",
+          reasons: [`基础设施异常(非执行质量问题): ${errMsg.slice(0, 200)}`],
+          evidence: [],
+          failure_class: "F_infra_error",
+        };
+        // verdict 前置落盘(P3):崩溃后盘面留痕,recover 审计依据
+        await writeYaml(join(dir, "runs", rid, "verdict.yaml"), infraVerdict).catch(() => {});
+        return { verdict: infraVerdict, claim: "", artifactBody: "", instruction: "" };
+      }
     };
 
     const results = execTasks.length === 1
@@ -402,17 +422,22 @@ export async function runGraphProject(rootDir: string, projectId: string, client
           }
         }
       } else {
-        // fail:归因
+        // fail:归因(infra_error 跳过 — 根因已知是基础设施,烧 LLM 调用去诊断一个
+        // ETIMEDOUT 没有意义,直接记 node_retries 交给 scheduler 决策)
         anyFailed = true;
         const retries = (wf.node_retries[node.id] ?? 0) + 1;
         wf.node_retries[node.id] = retries;
-        const diagnosis = await diagnoseFailure(client, {
-          node, verdict: r.verdict, claim: r.claim, artifact: r.artifactBody, instruction: r.instruction,
-          blackboard: wf.blackboard, spec, failCount: retries,
-          previousDiagnoses: await getNodeDiagnoses(solutionDir, node.id),
-        });
-        await appendEvent(solutionDir, { type: "diagnosis", node: node.id, run_id: rid, reason: `根因: ${diagnosis.root_cause} — ${diagnosis.explanation.slice(0, 200)}`, data: { root_cause: diagnosis.root_cause, explanation: diagnosis.explanation, fail_count: retries } });
-        bus?.publish(projectEvent("diagnosis", projectId, { node: node.id, runId: rid, diagnosis }));
+        if (r.verdict.failure_class === "F_infra_error") {
+          await appendEvent(solutionDir, { type: "diagnosis", node: node.id, run_id: rid, reason: `根因: G_infra_error — 基础设施异常(LLM 网络/网关),非执行质量问题`, data: { root_cause: "G_infra_error", explanation: r.verdict.reasons.join("; "), fail_count: retries, skipped_llm_diagnosis: true } });
+        } else {
+          const diagnosis = await diagnoseFailure(client, {
+            node, verdict: r.verdict, claim: r.claim, artifact: r.artifactBody, instruction: r.instruction,
+            blackboard: wf.blackboard, spec, failCount: retries,
+            previousDiagnoses: await getNodeDiagnoses(solutionDir, node.id),
+          });
+          await appendEvent(solutionDir, { type: "diagnosis", node: node.id, run_id: rid, reason: `根因: ${diagnosis.root_cause} — ${diagnosis.explanation.slice(0, 200)}`, data: { root_cause: diagnosis.root_cause, explanation: diagnosis.explanation, fail_count: retries } });
+          bus?.publish(projectEvent("diagnosis", projectId, { node: node.id, runId: rid, diagnosis }));
+        }
       }
     }
 
@@ -489,7 +514,7 @@ async function executeAndVerifyInstance(
         }
         (wf as GraphRuntime & { resumed_runs?: string[] }).resumed_runs!.push(runId);
         // resume 后更新 content
-        if (resumeResult.content) {
+        if (resumeResult.content && !resumeResult.failed) {
           await appendFile(join(dir, "runs", runId, "stream.md"), `\n## Resume 续接输出\n\n${resumeResult.content}\n`, "utf8");
         }
       } else if (review.verdict === "resume" && !execResult.sessionId) {
@@ -527,6 +552,8 @@ async function executeAndVerifyInstance(
       artifactBody = await renderArtifactForVerifier(snapshot);
       verdict = await verifyAgentNode(rootDir, projectId, runId, node, spec, client, bus, artifactBody, snapshot.entries.map(e => e.snapshot_path), instance);
     }
+    // verdict 前置落盘(P3):不等批收集循环 — 崩溃后盘面留痕,recover 审计依据
+    await writeYaml(join(dir, "runs", runId, "verdict.yaml"), verdict).catch(() => {});
   }
 
   return { verdict, claim: runResult, artifactBody, instruction };
@@ -640,6 +667,7 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
   let agentSessionId: string | undefined;
   let agentExitCode = 0;
   let agentHitMaxTurns = false;
+  let agentUsedTurns: number | undefined;
   if (node.kind === "agent") {
     // 重节点:走 ExecutorAdapter(hermes CLI),让 agent 框架用自己的工具(web/browser/...)完成
     bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: "调用 Hermes agent 执行(带 web 工具)..." }));
@@ -660,6 +688,7 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     agentSessionId = agentRun.sessionId;
     agentExitCode = agentRun.exitCode;
     agentHitMaxTurns = agentRun.hitMaxTurns ?? false;
+    agentUsedTurns = agentRun.usedTurns;
     if (!content && !agentHitMaxTurns) throw new Error(`Hermes agent returned empty (exit ${agentRun.exitCode})`);
     await appendFile(streamPath, `\n## Hermes Agent 输出\n\n${content}\n`, "utf8");
     // 诊断日志:完整 raw 存单独文件,stream.md 只存摘要
@@ -687,7 +716,7 @@ async function executeNode(rootDir: string, projectId: string, runId: string, no
     sessionId: agentSessionId,
     exitCode: agentExitCode,
     hitMaxTurns: agentHitMaxTurns,
-    usedTurns: agentMaxTurns,  // TODO: 从 hermes 输出提取实际轮次
+    usedTurns: agentUsedTurns ?? agentMaxTurns,  // hermes 页脚解析的真实 Messages 数;解析不到退回上限(保守)
   };
 }
 
@@ -894,12 +923,33 @@ async function collectExecutionFacts(rootDir: string, projectId: string, runId: 
     return "其他";
   });
 
-  // 搜索关键词去重率
-  const searchKeywords = rawContent.match(/web_search.*?["\u201c]([^"\u201d]+)["\u201d]/g)?.map(m => m.slice(-20)) ?? [];
+  // 搜索关键词去重率 — 覆盖三种实际使用的搜索形态:
+  // web_search "关键词" / curl URL query / browser_navigate URL
+  // (2026-10-09 事故:executor 实际全用 curl,旧正则只认 web_search → 去重率恒 0 →
+  //  Composer 被喂"完全重复搜索"的假事实。提取器必须匹配真实行为面。)
+  const searchKeywords: string[] = [];
+  const webSearchMatches = rawContent.match(/web_search.*?["\u201c]([^"\u201d]+)["\u201d]/g) ?? [];
+  for (const m of webSearchMatches) searchKeywords.push(m.slice(-20));
+  // curl 行:取 URL 的 query 部分作为关键词(search_query=... / ?query=... / q=...)
+  const curlMatches = rawContent.split("\n").filter(l => l.includes("curl") && l.includes("http"));
+  for (const line of curlMatches) {
+    const q = line.match(/[?&](?:search_query|query|q)=([^&\s"']+)/);
+    if (q) searchKeywords.push(decodeURIComponent(q[1]).slice(0, 40));
+    else {
+      const url = line.match(/https?:\/\/[^\s"']+/);
+      if (url) searchKeywords.push(url[0].slice(0, 40));
+    }
+  }
+  // browser_navigate 行:URL 作为关键词
+  const navMatches = rawContent.split("\n").filter(l => l.includes("browser_navigate"));
+  for (const line of navMatches) {
+    const url = line.match(/https?:\/\/[^\s"']+/);
+    if (url) searchKeywords.push(url[0].slice(0, 40));
+  }
   const uniqueKeywords = new Set(searchKeywords);
   const searchKeywordsDedupRatio = searchKeywords.length > 0
     ? uniqueKeywords.size / searchKeywords.length
-    : 0;
+    : 1;  // 没提取到任何搜索行为时不给 0(0 会误导 Composer 判"全重复")— 给 1 并让行为摘要说明情况
 
   return {
     outputFiles,
@@ -911,16 +961,18 @@ async function collectExecutionFacts(rootDir: string, projectId: string, runId: 
 }
 
 /** 续接执行:用 hermes --resume <session_id> */
-async function resumeExecution(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, sessionId: string, newMaxTurns: number, bus: EventBus | undefined, instance?: string): Promise<{ content: string }> {
+async function resumeExecution(rootDir: string, projectId: string, runId: string, node: CapabilityNode, spec: GraphWorkflowSpec, sessionId: string, newMaxTurns: number, bus: EventBus | undefined, instance?: string): Promise<{ content: string; failed: boolean; failureReason?: string }> {
   const dir = projectPath(rootDir, projectId);
   const runDir = join(dir, "runs", runId);
   const streamPath = join(runDir, "stream.md");
+  const solutionDir = join(dir, "solution");
 
   bus?.publish(projectEvent("llm_stream", projectId, { runId, nodeId: node.id, phase: "executing", message: `Resume 续接执行(session ${sessionId.slice(0, 12)}..., 新上限 ${newMaxTurns})...` }));
 
   const { HermesAdapter } = await import("./executors.js");
   const adapter = injectedExecutor ?? new HermesAdapter();
   const isFake = adapter.name !== "hermes";
+  const resumeStartedAt = Date.now();
 
   // 如果 adapter 有 resume 方法,用 resume;否则 fallback 到 execute
   if (adapter.resume && !isFake) {
@@ -933,10 +985,23 @@ async function resumeExecution(rootDir: string, projectId: string, runId: string
       },
     });
     const content = agentRun.claim || agentRun.raw;
-    await writeFile(join(runDir, "raw-stdout.txt"), agentRun.raw, "utf8");
-    return { content };
+    // P2:resume 输出绝不覆盖原 raw-stdout.txt(2026-10-09 事故:resume 秒退把 25KB 诊断日志
+    // 覆盖成 0 字节)。写 raw-resume.txt,原文件不动。
+    await writeFile(join(runDir, "raw-resume.txt"), agentRun.raw, "utf8");
+    if (agentRun.stderr) await writeFile(join(runDir, "raw-resume-stderr.txt"), agentRun.stderr, "utf8");
+
+    // P2:resume 秒退(<2s)或空输出 = 异常(无效 session id / 瞬时失败),显式报事件,不静默吞
+    const elapsed = Date.now() - resumeStartedAt;
+    if (!content || elapsed < 2_000) {
+      const failureReason = `resume 异常: ${!content ? "空输出" : `秒退(${elapsed}ms)`}${agentRun.stderr ? `; stderr: ${agentRun.stderr.slice(0, 200)}` : ""}`;
+      await appendEvent(solutionDir, { type: "resume_failed", node: node.id, run_id: runId, reason: failureReason, data: { elapsed_ms: elapsed, exit_code: agentRun.exitCode, stderr_head: (agentRun.stderr ?? "").slice(0, 500) } });
+      bus?.publish(projectEvent("resume_failed", projectId, { runId, nodeId: node.id, error: failureReason }));
+      await appendFile(streamPath, `\n## Resume 失败\n\n${failureReason}\n\n(详细输出: runs/${runId}/raw-resume.txt)\n`, "utf8");
+      return { content, failed: true, failureReason };
+    }
+    return { content, failed: false };
   }
 
   // Fake executor 或无 resume:返回空(fake executor 不支持 resume)
-  return { content: "" };
+  return { content: "", failed: false };
 }

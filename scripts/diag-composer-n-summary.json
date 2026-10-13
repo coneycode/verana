@@ -1,0 +1,80 @@
+[
+  {
+    "i": 1,
+    "status": 200,
+    "elapsed": 8087,
+    "kind": "ok",
+    "stop_reason": "end_turn",
+    "block_types": [
+      "thinking",
+      "text"
+    ],
+    "text_len": 8227,
+    "output_tokens": 6434
+  },
+  {
+    "i": 2,
+    "status": 200,
+    "elapsed": 8094,
+    "kind": "ok",
+    "stop_reason": "end_turn",
+    "block_types": [
+      "thinking",
+      "text"
+    ],
+    "text_len": 6306,
+    "output_tokens": 3507
+  },
+  {
+    "i": 3,
+    "status": 200,
+    "elapsed": 8070,
+    "kind": "ok",
+    "stop_reason": "end_turn",
+    "block_types": [
+      "thinking",
+      "text"
+    ],
+    "text_len": 6869,
+    "output_tokens": 3665
+  },
+  {
+    "i": 4,
+    "status": 200,
+    "elapsed": 8057,
+    "kind": "ok",
+    "stop_reason": "end_turn",
+    "block_types": [
+      "thinking",
+      "text"
+    ],
+    "text_len": 8302,
+    "output_tokens": 3283
+  },
+  {
+    "i": 5,
+    "status": 200,
+    "elapsed": 8056,
+    "kind": "ok",
+    "stop_reason": "end_turn",
+    "block_types": [
+      "thinking",
+      "text"
+    ],
+    "text_len": 6980,
+    "output_tokens": 5069
+  },
+  {
+    "i": 6,
+    "status": 200,
+    "elapsed": 8061,
+    "kind": "ok",
+    "stop_reason": "end_turn",
+    "block_types": [
+      "thinking",
+      "text"
+    ],
+    "text_len": 7277,
+    "output_tokens": 4510
+  }
+]

@@ -141,7 +141,8 @@ export interface EventEntry {
     | "scheduler_decision" | "capability_added" | "run_created"
     | "artifact_collected" | "artifact_validated" | "artifact_failed"
     | "artifact_materialized" | "artifact_materialization_failed"
-    | "llm_stream" | "diagnosis" | "max_turns_review";
+    | "llm_stream" | "diagnosis" | "max_turns_review"
+    | "run_infra_error" | "resume_failed" | "run_error";
   node?: string;
   run_id?: string;
   reason?: string;          // 调度理由/护栏原因/人审原因
@@ -182,7 +183,7 @@ export interface VerdictRecord {
   evidence: string[];
   artifact_report?: string;
   artifact_paths?: string[];
-  failure_class?: "F_artifact_contract_failure";
+  failure_class?: "F_artifact_contract_failure" | "F_infra_error";
   cross_check_agree?: boolean;  // 轻节点交叉验证是否一致
 }
 

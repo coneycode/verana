@@ -91,6 +91,7 @@ const COMPOSER_SYSTEM_BASE = `你是一个 workflow 规划者(Composer)。你的
 - instances 的目的和判定:instances 的目的是拆分长任务,保证每次 agent 执行的上下文短、聚焦单一子任务,提升成功率。同时支持精准重试(只重跑失败的实例,不重跑已完成的)。判定标准:如果一个节点的工作可以拆成多个独立子任务,每个子任务需要 agent 单独搜索/推理/写入,用 instances。如果一次 agent 执行能完成所有产出,不用 instances
 - instances 的 scope/excludes:每个 instance 带 scope(该维度包含什么)和 excludes(该维度不包含什么,来自其他 instance 的维度)。executor 执行时只写 scope 范围内的内容,不写 excludes 里的内容。这避免跨维度内容混入
 - instances 和 output 路径:有非空 instances 的节点,每个 output path 必须含 {instance} 占位符(如 solution/evidence/{instance}.md),每个实例写入不同文件。不含 {instance} 的路径校验不通过
+- instances 命名:实例 name 用中文短语(与用户语言一致),如"产品定位/目标用户/商业模式",不用英文单词。实例名会直接显示在流程图上并用作文件名
 - context_inputs:每个节点声明执行时需要参考的 blackboard 字段。只注入这个节点真正需要的字段。不填或留空数组=注入全量(兜底)。_remaining 字段是代码维护的不需要放进 context_inputs。context_inputs 里的字段名必须在 blackboard_schema.fields 里存在
 - entry_node 是调度大脑第一步选的节点(通常是最早的能力)
 - 用中文写 desc
@@ -176,7 +177,22 @@ export async function planGraphWorkflow(
     const userPrompt = buildComposerPrompt(goal, conclusions, taskType, template) + (lastIssues ? `\n\n【上轮问题清单(请修复)】\n${lastIssues}` : "");
     // 推 LLM 输入给前端
     bus?.publish(projectEvent("plan_progress", projectId, { step: "llm_input", role: "composer", content: userPrompt.slice(0, 2000) }));
-    const llmResult = await client.completeJson<ComposerLlmResult>("composer", COMPOSER_SYSTEM_BASE, userPrompt);
+    let llmResult: ComposerLlmResult;
+    try {
+      llmResult = await client.completeJson<ComposerLlmResult>("composer", COMPOSER_SYSTEM_BASE, userPrompt);
+    } catch (e) {
+      const msg = (e as Error).message;
+      // 软失败(输出层问题):截断 / 空内容 / JSON 解析失败 → 带定向反馈重试,不炸整个 plan
+      if (attempt < MAX_REGEN - 1 && (msg.includes("LLM_OUTPUT_TRUNCATED") || msg.includes("empty content") || msg.includes("JSON parse failed") || msg.includes("No JSON found"))) {
+        const feedback = msg.includes("LLM_OUTPUT_TRUNCATED")
+          ? "上轮输出超出 max_tokens 上限被截断,JSON 不完整。请精简输出:thinking 控制在最短、desc 每项两句话内、acceptance/completion_criteria 每条一行、省略一切可省略的字段,确保 JSON 完整闭合(以 } 结尾)"
+          : `上轮输出无法解析为完整 JSON(${msg.slice(0, 150)})。请输出单个完整闭合的 JSON 对象,以 } 结尾,不要中断`;
+        bus?.publish(projectEvent("plan_progress", projectId, { step: "llm_soft_failed", attempt: attempt + 1, message: `输出层失败,带定向反馈重试: ${msg.slice(0, 120)}` }));
+        lastIssues = feedback;
+        continue;
+      }
+      throw e;
+    }
     // 推 LLM 输出给前端
     bus?.publish(projectEvent("plan_progress", projectId, { step: "llm_output", role: "composer", content: JSON.stringify(llmResult, null, 2).slice(0, 3000) }));
 
@@ -340,9 +356,17 @@ function assembleSpec(projectId: string, rawGoal: string, conclusions: Array<{ t
       })),
       human_checkpoint_every: r.guardrails?.human_checkpoint_every ?? 0,
     },
-    blackboard_schema: {
-      fields: r.blackboard_schema?.fields ?? [],
-    },
+    blackboard_schema: (() => {
+      const fields = r.blackboard_schema?.fields ?? [];
+      // _remaining 是代码维护的机械字段(graph-engine 初始化 + verdict 后移除),
+      // 不依赖 LLM 记住规则——缺了自动补,校验天然通过
+      const missing = capabilities
+        .filter(c => c.instances && c.instances.length > 0)
+        .map(c => `${c.id}_remaining`)
+        .filter(key => !fields.some(f => f.key === key));
+      const auto = missing.map(key => ({ key, desc: `未完成的 ${key.replace(/_remaining$/, "")} 实例(代码维护)`, bounded: true }));
+      return { fields: [...fields, ...auto] };
+    })(),
     entry_node: r.entry_node && capabilities.some((c) => c.id === r.entry_node) ? r.entry_node : (capabilities[0]?.id ?? ""),
     completion_criteria: r.completion_criteria ?? [],
     hard_constraints: [

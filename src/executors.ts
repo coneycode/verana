@@ -18,7 +18,9 @@ export interface AgentRun {
   sessionId?: string;   // hermes session id(可用于 resume)
   exitCode: number;
   raw: string;          // 完整 stdout(调试用)
+  stderr?: string;      // 完整 stderr(resume 秒退等失败时根因在这里,必须保留)
   hitMaxTurns?: boolean; // executor 是否因 max-turns 限制退出
+  usedTurns?: number;    // 从 hermes 页脚解析的真实轮次(取 Messages 计数;解析失败=undefined)
 }
 
 export interface ExecutorAdapter {
@@ -179,10 +181,15 @@ export class HermesAdapter implements ExecutorAdapter {
           if (resumeMatch) sessionId = resumeMatch[1];
         }
 
-        // 检测 max-turns hit:hermes 输出里有 "max.*turn" 或 "turn.*limit" 或 "Max turns"
-        const hitMaxTurns = /max.*turn|turn.*limit|Max turns|reached.*turn/i.test(stdout)
-          || stdout.includes("Messages:") && stdout.includes("tool calls")  // 退化检测:有消息和工具调用但没有 hermes 块
+        // 检测 max-turns hit:只认 hermes 的显式输出文本 + 被 signal kill。
+        // 注意:不要用 "Messages: x (N user, M tool calls)" 做启发式 — hermes 正常结束的页脚
+        // 永远带这两个词,会把所有正常完成误判成 max-turns hit(2026-10-09 事故:5/5 误报)。
+        const hitMaxTurns = /Max turns|hit.*max.*turn|max-turns limit reached/i.test(stdout)
           || code === null;  // 被 signal kill(timeout 或其他原因)——也视为未正常完成
+
+        // 从 hermes 页脚解析真实轮次:"Messages: 68 (1 user, 66 tool calls)" → 68
+        const turnsMatch = stdout.match(/Messages:\s*(\d+)\s*\(/);
+        const usedTurns = turnsMatch ? Number(turnsMatch[1]) : undefined;
 
         // 从 stdout 提取 hermes 的最终文字输出(╭─ ⚕ Hermes ─ 块)
         // 工具调用日志(┊ 开头)不进 claim,留在 raw/stdream 里
@@ -224,7 +231,9 @@ export class HermesAdapter implements ExecutorAdapter {
           sessionId,
           exitCode: code ?? 0,
           raw: stdout,
+          stderr: stderr || undefined,
           hitMaxTurns,
+          usedTurns,
         } as AgentRun & { hitMaxTurns: boolean });
       });
 
@@ -234,6 +243,7 @@ export class HermesAdapter implements ExecutorAdapter {
           claim: "",
           exitCode: -1,
           raw: stderr + "\nspawn error: " + err.message,
+          stderr: stderr + "\nspawn error: " + err.message,
         });
       });
     });

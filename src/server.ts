@@ -11,7 +11,7 @@ import { HttpLlmClient, loadConfig, setLlmStatusCallback, type LlmClient } from 
 import { approveGate, deleteProject, getProject, listProjects, projectPath, rejectGate, saveProjectState, writeYaml } from "./project-store.js";
 import { composeGraphWorkflow, planGraphWorkflow } from "./pipeline.js";
 import { runGraphProject, applyHumanVerdict } from "./graph-engine.js";
-import { readEvents } from "./event-log.js";
+import { appendEvent, readEvents } from "./event-log.js";
 import { validateGraphWorkflow } from "./workflow-validator.js";
 import { renderHomePage } from "./web.js";
 import type { GraphWorkflowSpec } from "./types.js";
@@ -205,7 +205,26 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   app.post<{ Params: { id: string } }>("/projects/:id/run", async (request) => {
     runGraphProject(options.rootDir, request.params.id, client, bus)
       .then(() => { bus.publish(projectEvent("run_completed", request.params.id)); })
-      .catch((err: Error) => { console.error(`[run] ${request.params.id} failed:`, err); bus.publish(projectEvent("run_failed", request.params.id, { error: err.message })); });
+      .catch(async (err: Error) => {
+        // P0(2026-10-09 事故):run 失败必须落盘 — 只 console.error + SSE 的话,错误进 PIPE
+        // (捞不回)且项目永远显示"执行中"。事件 + 状态落盘,前端与 recover 都可见。
+        console.error(`[run] ${request.params.id} failed:`, err);
+        try {
+          const state = await getProject(options.rootDir, request.params.id);
+          const wf = state.status.workflows.solution;
+          if (wf && wf.workflow_status === "executing") {
+            wf.workflow_status = "awaiting_human";
+            wf.awaiting = "human";
+            wf.awaiting_reason = `运行崩溃: ${err.message.slice(0, 300)}`;
+            wf.awaiting_scene = "anomaly";
+            await saveProjectState(options.rootDir, state);
+          }
+          await appendEvent(join(projectPath(options.rootDir, request.params.id), "solution"), { type: "run_error", reason: `runGraphProject 崩溃: ${err.message.slice(0, 500)}`, data: { error: err.message.slice(0, 2000), stack: (err.stack ?? "").slice(0, 2000) } });
+        } catch (persistErr) {
+          console.error(`[run] ${request.params.id} failed to persist error state:`, persistErr);
+        }
+        bus.publish(projectEvent("run_failed", request.params.id, { error: err.message }));
+      });
     return { status: "running", projectId: request.params.id };
   });
 
@@ -410,6 +429,10 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
         const state = await getProject(options.rootDir, p.id);
         const wf = state.status.workflows.solution;
         if (wf && wf.workflow_status === "executing" && wf.awaiting !== "human") {
+          // P3 恢复审计:重跑前先核对已有 verdict。批隔离/落盘修复后,崩溃瞬间已 passed 的
+          // instance 其 verdict.yaml 已落盘 — 直接补扣 blackboard,不为已完成的活再花一次执行。
+          // (审计已有工作再决定加新机制:先修矛盾,再重跑)
+          await auditPassedVerdicts(options.rootDir, p.id, wf);
           console.log(`[recover] 项目 ${p.id} 卡在 executing(awaiting=${wf.awaiting}),恢复执行`);
           runGraphProject(options.rootDir, p.id, client, bus)
             .then(() => console.log(`[recover] ${p.id} 恢复执行完成`))
@@ -424,6 +447,38 @@ export async function buildServer(options: ServerOptions): Promise<FastifyInstan
   }
 
   return app;
+}
+
+/** P3 恢复审计:重跑前核对已有 verdict。崩溃瞬间已 passed 的 instance(verdict.yaml 已落盘),
+ *  直接补扣 blackboard remaining,不为已完成的活再花一次执行。
+ *  数据源:events.log 的 run_created(run_id → node/instance 映射) + runs/<rid>/verdict.yaml。 */
+async function auditPassedVerdicts(rootDir: string, projectId: string, wf: NonNullable<Awaited<ReturnType<typeof getProject>>["status"]["workflows"]["solution"]>): Promise<void> {
+  const solutionDir = join(projectPath(rootDir, projectId), "solution");
+  const events = await readEvents(solutionDir, 0);
+  // run_id → { node, instance }(取每个 run 的 run_created;重复创建同 id 不会发生 — runDir 即创建锁)
+  const runMeta = new Map<string, { node: string; instance?: string }>();
+  for (const e of events) {
+    if (e.type === "run_created" && e.run_id) runMeta.set(e.run_id, { node: e.node ?? "?", instance: e.instance });
+  }
+  let salvaged = 0;
+  for (const [rid, meta] of runMeta) {
+    if (!meta.instance) continue;
+    const rk = `${meta.node}_remaining`;
+    const remaining = wf.blackboard[rk];
+    if (!Array.isArray(remaining) || !remaining.includes(meta.instance)) continue;  // 不在 remaining 里=已扣过
+    let verdict: { passed?: boolean } | null = null;
+    try {
+      verdict = parse(await readFile(join(projectPath(rootDir, projectId), "runs", rid, "verdict.yaml"), "utf8")) as { passed?: boolean };
+    } catch { continue; }  // 无 verdict.yaml = 未完成,留给重跑
+    if (verdict?.passed === true) {
+      wf.blackboard[rk] = remaining.filter((inst: string) => inst !== meta.instance);
+      salvaged += 1;
+      console.log(`[recover-audit] ${projectId}: ${rid} (${meta.node}/${meta.instance}) 已 passed — 补扣 blackboard,跳过重跑`);
+    }
+  }
+  if (salvaged > 0) {
+    await appendEvent(solutionDir, { type: "blackboard_updated", node: "recover_audit", reason: `恢复审计: ${salvaged} 个已 passed instance 补扣 remaining,不重跑`, data: { salvaged } });
+  }
 }
 
 async function collectMarkdownFiles(baseDir: string, currentDir: string, result: Array<{ path: string; content: string }>): Promise<void> {

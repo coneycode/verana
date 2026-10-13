@@ -7,8 +7,13 @@ composer:
   base_url: "http://your-gateway/anthropic"
   model: "ppio/pa/claude-opus-4-8"
   api_key: "sk-xxx"
+  # 可选:单次响应输出 token 上限(含 thinking)。默认 16384。
+  # 输出预算要容纳 thinking 块(推理型模型默认开)+ 完整 JSON spec;
+  # 若模型输出上限较低或经常截断,按需调整(截断会触发自动带反馈重试,不会静默失败)
+  # max_tokens: 16384
 
 evaluator:
   base_url: "http://your-gateway/anthropic"
   model: "pa/claude-sonnet-5"
   api_key: "sk-xxx"
+  # max_tokens: 16384

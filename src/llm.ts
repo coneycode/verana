@@ -14,6 +14,8 @@ export interface ModelConfig {
   base_url: string;
   model: string;
   api_key: string;
+  /** 单次响应输出 token 上限(含 thinking)。默认 16384。 */
+  max_tokens?: number;
 }
 
 export interface VeranaConfig {
@@ -55,8 +57,11 @@ function normalizeRole(raw: Partial<ModelConfig> | undefined, role: ModelRole): 
   if (!raw?.base_url) throw new Error(`Missing ${role}.base_url in config`);
   if (!raw?.model) throw new Error(`Missing ${role}.model in config`);
   if (!raw?.api_key) throw new Error(`Missing ${role}.api_key in config`);
-  return { role, base_url: raw.base_url, model: raw.model, api_key: raw.api_key };
+  return { role, base_url: raw.base_url, model: raw.model, api_key: raw.api_key, max_tokens: raw.max_tokens };
 }
+
+/** 输出 token 上限默认值。要容纳 thinking(网关默认开,实测可达 20k+ 字符)+ 完整 JSON spec,8192 不够。 */
+export const DEFAULT_MAX_TOKENS = 16384;
 
 export type LlmStatusCallback = (status: { phase: "calling" | "done" | "error"; role: string; description: string }) => void;
 
@@ -109,7 +114,7 @@ export class HttpLlmClient implements LlmClient {
     const url = `${cfg.base_url.replace(/\/$/, "")}/v1/messages`;
     const body: Record<string, unknown> = {
       model: cfg.model,
-      max_tokens: 8192,
+      max_tokens: cfg.max_tokens ?? DEFAULT_MAX_TOKENS,
       system,
       messages: [{ role: "user", content: user }],
     };
@@ -117,16 +122,42 @@ export class HttpLlmClient implements LlmClient {
     if (onDelta) body.stream = true;
 
     const maxRetries = 3;
+    // 网络层安全阀:网关吞吐波动大(实测 8s~250s),300s 兜底防无限等(2026-10-09 ETIMEDOUT 事故)
+    const REQUEST_TIMEOUT_MS = 300_000;
+    let lastNetworkError: Error | null = null;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": cfg.api_key,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify(body),
-      });
+      // fetch 自身的网络异常(ETIMEDOUT/ECONNRESET/DNS)不在 res.status 里,必须 try/catch 才能重试
+      let res: Response;
+      try {
+        const controller = new AbortController();
+        const timeoutTimer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        try {
+          res = await fetch(url, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-api-key": cfg.api_key,
+              "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeoutTimer);
+        }
+      } catch (netErr) {
+        // LLM_OUTPUT_TRUNCATED 是业务语义错误(不重试,上抛让 regen 循环处理)
+        if (netErr instanceof Error && netErr.message.includes("LLM_OUTPUT_TRUNCATED")) throw netErr;
+        lastNetworkError = netErr as Error;
+        const abortCause = (netErr as Error & { cause?: { code?: string } }).cause?.code ?? (netErr as Error).name;
+        if (attempt < maxRetries) {
+          const backoff = 5_000 * (attempt + 1);  // 5s/10s/15s 退避
+          console.log(`[llm] ${role} network error (${abortCause ?? "network"}), retrying in ${backoff / 1000}s (${attempt + 1}/${maxRetries})...`);
+          await sleep(backoff);
+          continue;
+        }
+        throw new Error(`LLM ${role} network error after ${maxRetries + 1} attempts (${abortCause ?? "network"}): ${lastNetworkError.message}`);
+      }
 
       if (res.status === 429 && attempt < maxRetries) {
         console.log(`[llm] ${role} got 429, waiting 60s before retry (${attempt + 1}/${maxRetries})...`);
@@ -136,15 +167,43 @@ export class HttpLlmClient implements LlmClient {
 
       if (!res.ok) {
         const text = await res.text();
+        // 5xx 是网关侧瞬时故障,值得重试;4xx(除429)是请求问题,重试无意义
+        if (res.status >= 500 && attempt < maxRetries) {
+          console.log(`[llm] ${role} got ${res.status}, retrying in 30s (${attempt + 1}/${maxRetries})...`);
+          await sleep(30_000);
+          continue;
+        }
         throw new Error(`LLM ${role} call failed (${res.status}): ${text.slice(0, 500)}`);
       }
 
       // 非流式:一次性 JSON
       if (!onDelta || !res.body) {
-        const data = (await res.json()) as { content: Array<{ type: string; text?: string }> };
+        const rawText = await res.text();
+        let data: { content?: Array<{ type: string; text?: string }>; stop_reason?: string; usage?: unknown };
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          throw new Error(`LLM ${role} returned non-JSON body: ${rawText.slice(0, 500)}`);
+        }
         const textBlock = data.content?.find((block) => block.type === "text");
         const content = textBlock?.text;
-        if (!content) throw new Error(`LLM ${role} returned empty content`);
+        if (!content) {
+          // 可观测性:200 但没有 text block — dump 结构化证据(stop_reason/block类型/usage),再重试
+          const blockTypes = (data.content ?? []).map((b) => b.type).join(",");
+          console.error(`[llm] ${role} empty content (attempt ${attempt + 1}): stop_reason=${data.stop_reason} blocks=[${blockTypes}] usage=${JSON.stringify(data.usage)} body_head=${JSON.stringify(rawText.slice(0, 2000))}`);
+          if (attempt < maxRetries) {
+            console.log(`[llm] ${role} empty content, retrying (${attempt + 1}/${maxRetries})...`);
+            await sleep(5_000);
+            continue;
+          }
+          throw new Error(`LLM ${role} returned empty content after ${maxRetries + 1} attempts: stop_reason=${data.stop_reason} blocks=[${blockTypes}]`);
+        }
+        // 截断检测:stop_reason=max_tokens 意味着输出撞了上限,内容大概率不完整。
+        // 抛专用错误(带 token 数),让上层(pipeline regen 循环)带"精简输出"反馈重试。
+        if (data.stop_reason === "max_tokens") {
+          console.error(`[llm] ${role} output truncated by max_tokens=${cfg.max_tokens ?? DEFAULT_MAX_TOKENS} (output_tokens=${data.usage && typeof data.usage === "object" && "output_tokens" in data.usage ? (data.usage as { output_tokens: number }).output_tokens : "?"}, text length=${content.length})`);
+          throw new Error(`LLM_OUTPUT_TRUNCATED: output hit max_tokens limit (${cfg.max_tokens ?? DEFAULT_MAX_TOKENS}) — content is likely incomplete`);
+        }
         return content;
       }
 
@@ -153,6 +212,9 @@ export class HttpLlmClient implements LlmClient {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      // 可观测性:记录事件类型分布和最后几个事件,空流时能定位卡在哪
+      const eventCounts: Record<string, number> = {};
+      let tailEvents: string[] = [];
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -168,6 +230,9 @@ export class HttpLlmClient implements LlmClient {
           if (!jsonStr || jsonStr === "[DONE]") continue;
           try {
             const evt = JSON.parse(jsonStr) as { type: string; delta?: { type: string; text?: string } };
+            eventCounts[evt.type] = (eventCounts[evt.type] ?? 0) + 1;
+            tailEvents.push(jsonStr.slice(0, 200));
+            if (tailEvents.length > 5) tailEvents.shift();
             if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta" && evt.delta.text) {
               full += evt.delta.text;
               onDelta(evt.delta.text);
@@ -175,7 +240,16 @@ export class HttpLlmClient implements LlmClient {
           } catch { /* malformed event line, skip */ }
         }
       }
-      if (!full) throw new Error(`LLM ${role} stream returned empty content`);
+      if (!full) {
+        // 200 但流里没有 text_delta — dump 事件分布证据
+        console.error(`[llm] ${role} stream empty content (attempt ${attempt + 1}): events=${JSON.stringify(eventCounts)} tail=${JSON.stringify(tailEvents)}`);
+        if (attempt < maxRetries) {
+          console.log(`[llm] ${role} stream empty content, retrying (${attempt + 1}/${maxRetries})...`);
+          await sleep(5_000);
+          continue;
+        }
+        throw new Error(`LLM ${role} stream returned empty content after ${maxRetries + 1} attempts: events=${JSON.stringify(eventCounts)}`);
+      }
       return full;
     }
     throw new Error(`LLM ${role} call failed: exhausted 429 retries`);

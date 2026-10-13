@@ -71,9 +71,9 @@ function buildCapabilityGraph(spec) {
     }
   }
 
-  // retry 自环(虚线):每个节点都可能被 scheduler 重试
+  // retry 自环(虚线):每个节点都可能被调度大脑重试
   for (const c of caps) {
-    lines.push('  ' + c.id + ' -.retry.-> ' + c.id);
+    lines.push('  ' + c.id + ' -.重试.-> ' + c.id);
   }
 
   // 回退边(虚线):最后一个节点(通常是 review)fail → 回退到 deliverable 产出节点
@@ -81,7 +81,7 @@ function buildCapabilityGraph(spec) {
     const lastNode = caps[caps.length - 1];
     const prodNode = caps.find(c => c.outputs?.some(o => o.role === 'deliverable'));
     if (prodNode && prodNode.id !== lastNode.id) {
-      lines.push('  ' + lastNode.id + ' -.fail回退.-> ' + prodNode.id);
+      lines.push('  ' + lastNode.id + ' -.失败回退.-> ' + prodNode.id);
     }
   }
 
@@ -357,9 +357,9 @@ function renderViewMode(el, mode) {
       let legendHtml = '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.6">';
       legendHtml += '<b>图例:</b> ';
       legendHtml += '实线 → 顺序路径(可能执行顺序) · ';
-      legendHtml += '虚线 -.retry.-> 节点可被 scheduler 重试 · ';
-      legendHtml += '虚线 -.fail回退.-> 审核失败回退到产出节点 · ';
-      legendHtml += '×N = 预期执行次数(=instances 数量,无 instances = ×1 一次性)';
+      legendHtml += '虚线 -.重试.-> 节点可被调度大脑重试 · ';
+      legendHtml += '虚线 -.失败回退.-> 审核失败回退到产出节点 · ';
+      legendHtml += '×N = 预期执行次数(=实例数量,无实例 = ×1 一次性)';
       legendHtml += '</div>';
       html += legendHtml;
     } else { html += '<div class="muted">无 spec 数据</div>'; }
@@ -553,9 +553,9 @@ function renderMain() {
     let legendHtml = '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.6">';
     legendHtml += '<b>图例:</b> ';
     legendHtml += '实线 → 顺序路径(可能执行顺序) · ';
-    legendHtml += '虚线 -.retry.-> 节点可被 scheduler 重试 · ';
-    legendHtml += '虚线 -.fail回退.-> 审核失败回退到产出节点 · ';
-    legendHtml += '×N = 预期执行次数(=instances 数量,无 instances = ×1 一次性)';
+    legendHtml += '虚线 -.重试.-> 节点可被调度大脑重试 · ';
+    legendHtml += '虚线 -.失败回退.-> 审核失败回退到产出节点 · ';
+    legendHtml += '×N = 预期执行次数(=实例数量,无实例 = ×1 一次性)';
     legendHtml += '</div>';
     $('capGraph').insertAdjacentHTML('beforebegin', legendHtml);
     renderMermaidGraph('capGraph', graphDef);
