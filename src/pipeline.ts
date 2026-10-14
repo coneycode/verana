@@ -80,6 +80,7 @@ const COMPOSER_SYSTEM_BASE = `你是一个 workflow 规划者(Composer)。你的
   - write_report 的 check 要覆盖用户提的所有要求(每个要求一条 check),不要一个大而全的 check
 - 轻节点(light):判断/转换/更新记忆,单次调用;重节点(agent):创作/调研/分析,自主完成一件事
 - 每个节点必须有 checks(无验收不执行)
+- checks 的验收对象是本节点声明的 outputs 产出本身,不是它审阅/引用的对象。审校/评审/核对类节点(如 review_report)的 checks 必须描述"审校意见需要覆盖哪些标准、给出什么形式的结论"(如:审校覆盖全部验收标准并给出明确通过/不通过结论),绝不能照抄被审对象(如最终报告)的验收标准——审校意见文件不可能包含报告全文,照抄等于定了不可满足的标准,该节点必然失败(2026-10-12 RRSI 事故:4条报告标准被抄给审校节点,run-0009 必现 fail)
 - agent 节点必须有 outputs(artifact contract 要求,产出文件路径必须声明)
 - bounded 的 blackboard 字段必须有节点负责 updates
 - guardrails.hard.max_iterations 必须有(安全阀)

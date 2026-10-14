@@ -679,6 +679,24 @@ capability <id> output path escapes project root: <path>
 
 5. llm_rubric checks 不能替代 artifact contract。即使有 llm_rubric,agent 节点也必须有 outputs。
 
+6. 审校类节点 checks 口径(2026-10-12 RRSI 事故新增)。
+
+```text
+capability <id> 是审校节点但 checks 照抄了被审对象的标准(命中 N/M 个必需章节名,且无审校口径措辞) — ...
+```
+
+- 背景:Composer 偶发(实测 16 项目 3 次)把被审对象(最终报告)的验收标准
+  (required_sections/字数/风格)原样抄给审校节点(review_report 等),而审校节点的
+  outputs 是审校意见(intermediate)——verifier 把 checks 机械应用到本节点自己的
+  artifact snapshot,审校意见文件永远不可能包含报告全文,标准机械上不可满足,
+  无论 executor 干多好必现 fail。
+- 判定:节点 id/desc 含审校语义(审校|审阅|评审|复核|review) 且 outputs 全为
+  intermediate → 若 checks 文本命中 ≥2 个 deliverable_contract.required_sections
+  章节名,且不含审校口径措辞(审校|核对|逐项|结论|通过/不通过|检查了) → 拦截。
+- 配套(prompt 层,src/pipeline.ts):Composer prompt 增加原则"checks 的验收对象是
+  本节点声明的 outputs 产出本身,不是它审阅/引用的对象;审校类节点的 checks 必须描述
+  审校意见需要覆盖哪些标准、给出什么形式的结论"。
+
 ---
 
 ## 8. Graph Engine 落地改造点

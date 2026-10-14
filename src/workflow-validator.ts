@@ -76,6 +76,27 @@ export function validateGraphWorkflow(spec: GraphWorkflowSpec): ValidationResult
     }
   }
 
+  // 审校类节点 checks 口径(2026-10-12 RRSI 事故):审校节点的 outputs 是审校意见
+  // (intermediate),checks 必须验收审校意见本身。若 checks 照抄了 deliverable_contract
+  // 的 required_sections/字数等被审对象的标准,该节点机械上必现 fail — 拦在规划期。
+  // 判定:节点 desc/id 含审校语义 且 outputs 全是 intermediate → 检查其 checks 是否
+  // 与 deliverable_contract 的章节/结构要求高度重叠(出现≥2个必需章节名 或 出现
+  // "全部X个必需章节"句式 且 checks 里没有"审校/核对/结论"类措辞)。
+  const reviewSemantic = /审校|审阅|评审|复核|review/i;
+  for (const cap of caps) {
+    const isReviewNode = reviewSemantic.test(cap.id) || reviewSemantic.test(cap.desc.slice(0, 30));
+    const allIntermediate = (cap.outputs ?? []).length > 0 && cap.outputs!.every(o => (o.role ?? "") === "intermediate");
+    if (!isReviewNode || !allIntermediate) continue;
+    const contract = spec.deliverable_contract;
+    const sections = contract?.required_sections ?? [];
+    const checksText = (cap.checks ?? []).map(c => c.desc).join("\n");
+    const sectionHits = sections.filter(s => s && checksText.includes(s)).length;
+    const hasReviewPhrasing = /审校|核对|逐项|结论|通过\/不通过|检查了/.test(checksText);
+    if (sections.length >= 2 && sectionHits >= 2 && !hasReviewPhrasing) {
+      errors.push(`capability ${cap.id} 是审校节点但 checks 照抄了被审对象的标准(命中 ${sectionHits}/${sections.length} 个必需章节名,且无审校口径措辞) — 审校节点的 checks 应验收审校意见本身(如:审校覆盖全部验收标准并给出明确通过/不通过结论),不能要求审校意见包含报告全文/章节结构`);
+    }
+  }
+
   // 入口节点存在
   if (spec.entry_node && !ids.has(spec.entry_node)) {
     errors.push(`entry_node ${spec.entry_node} not in capabilities`);
